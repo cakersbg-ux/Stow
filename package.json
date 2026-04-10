@@ -1,0 +1,43 @@
+{
+  "name": "stow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first desktop archiver with dedupe, compression, encryption, and media optimization.",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:web": "vite",
+    "build": "tauri build",
+    "build:web": "vite build",
+    "bench:backend": "node backend/benchmarks.js",
+    "test:backend": "node --test backend/**/*.test.js",
+    "dataset:upscale-router": "node training/upscale-classifier/curateDataset.js",
+    "train:upscale-router": "node training/upscale-classifier/trainDistilledModel.js",
+    "bench:upscale-router": "node training/upscale-classifier/benchmarkClip.js distilled",
+    "bench:upscale-router:clip": "node training/upscale-classifier/benchmarkClip.js clip",
+    "bench:upscale-router:hybrid": "node training/upscale-classifier/benchmarkClip.js hybrid"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.13.12",
+    "@tauri-apps/api": "^2.0.0",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
+    "hash-wasm": "^4.12.0",
+    "@huggingface/transformers": "^4.0.1",
+    "libsodium-wrappers-sumo": "^0.7.15",
+    "mime-types": "^3.0.1",
+    "onnxruntime-node": "^1.23.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "sharp": "^0.34.3",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3"
+  }
+}

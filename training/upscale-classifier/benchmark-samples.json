@@ -1,0 +1,107 @@
+[
+  {
+    "id": "portrait_woman",
+    "label": "portrait",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/portrait-of-woman.jpg"
+  },
+  {
+    "id": "portrait_afro",
+    "label": "portrait",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/woman-with-afro.jpg"
+  },
+  {
+    "id": "portrait_man_car",
+    "label": "portrait",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/young-man-standing-and-leaning-on-car.jpg"
+  },
+  {
+    "id": "landscape_airport",
+    "label": "landscape",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/airport.jpg"
+  },
+  {
+    "id": "landscape_city",
+    "label": "landscape",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/city-streets.jpg"
+  },
+  {
+    "id": "landscape_lake",
+    "label": "landscape",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/moraine-lake.png"
+  },
+  {
+    "id": "photo_football",
+    "label": "photo",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/football-match.jpg"
+  },
+  {
+    "id": "photo_cats",
+    "label": "photo",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/cats.jpg"
+  },
+  {
+    "id": "photo_corgi",
+    "label": "photo",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/corgi.jpg"
+  },
+  {
+    "id": "illustration_ad",
+    "label": "illustration",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/coca_cola_advertisement.png"
+  },
+  {
+    "id": "anime_pikachu",
+    "label": "anime",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/pikachu.png"
+  },
+  {
+    "id": "ui_invoice",
+    "label": "ui_screenshot",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/invoice.png"
+  },
+  {
+    "id": "ui_receipt",
+    "label": "ui_screenshot",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/receipt.png"
+  },
+  {
+    "id": "ui_schedule",
+    "label": "ui_screenshot",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/schedule.png"
+  },
+  {
+    "id": "portrait_astronaut",
+    "label": "portrait",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/astronaut.png"
+  },
+  {
+    "id": "landscape_beach",
+    "label": "landscape",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/beach.png"
+  },
+  {
+    "id": "photo_market_crowd",
+    "label": "photo",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/9/96/Long_shot_of_crowd_in_early_market_morning.jpg"
+  },
+  {
+    "id": "photo_concert_crowd",
+    "label": "photo",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/b/bb/Concert_crowd_%28Unsplash%29.jpg"
+  },
+  {
+    "id": "photo_group_outdoor",
+    "label": "photo",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/d/df/Group_photo_of_the_participants_at_WikiOutdoor_Training_2024.jpg"
+  },
+  {
+    "id": "illustration_star_icon",
+    "label": "illustration",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/star-icon.png"
+  },
+  {
+    "id": "ui_semantic_search",
+    "label": "ui_screenshot",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/semantic-image-search.png"
+  }
+]
