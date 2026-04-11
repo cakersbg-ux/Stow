@@ -16,6 +16,8 @@ Update this section whenever an agent learns something durable about how this re
 ### Purpose
 
 - `Stow` is a local-first desktop archiver with dedupe, compression, encryption, and media optimization.
+- `Stow` and `Stow Framework` are separate projects.
+- `Stow Framework` is derived from `Stow`.
 
 ### Layout
 
