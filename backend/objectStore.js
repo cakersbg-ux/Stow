@@ -11,6 +11,34 @@ const { chunkFile } = require("./chunker");
 const { encryptPayload, decryptPayload } = require("./crypto");
 const { readObjectBucketCatalog, writeObjectBucketCatalog } = require("./catalogStore");
 
+const PRECOMPRESSED_EXTENSIONS = new Set([
+  ".7z",
+  ".aac",
+  ".avif",
+  ".flac",
+  ".gif",
+  ".gz",
+  ".heic",
+  ".heif",
+  ".jpeg",
+  ".jpg",
+  ".jxl",
+  ".m4a",
+  ".m4v",
+  ".mkv",
+  ".mov",
+  ".mp3",
+  ".mp4",
+  ".pdf",
+  ".png",
+  ".rar",
+  ".svgz",
+  ".webm",
+  ".webp",
+  ".xz",
+  ".zip"
+]);
+
 function storageIdToPath(baseDir, storageId) {
   return path.join(baseDir, "objects", storageId.slice(0, 2), `${storageId.slice(2)}.bin`);
 }
@@ -43,8 +71,27 @@ async function runCommand(command, args, inputBuffer) {
   });
 }
 
-async function compressBuffer(buffer, behavior, capabilities) {
+function shouldCompressArtifact(sourcePath, options = {}) {
+  const extension = (options.extension || path.extname(sourcePath)).toLowerCase();
+  const mime = (options.mime || "").toLowerCase();
+
+  if (PRECOMPRESSED_EXTENSIONS.has(extension)) {
+    return false;
+  }
+  if (mime.startsWith("video/") || mime.startsWith("audio/")) {
+    return false;
+  }
+  if (mime.startsWith("image/")) {
+    return false;
+  }
+  return true;
+}
+
+async function compressBuffer(buffer, behavior, capabilities, options = {}) {
   const safeCapabilities = capabilities || {};
+  if (options.compressible === false || buffer.length < 64 * 1024) {
+    return { buffer, compression: { algorithm: "none", level: 0 } };
+  }
   if (behavior === "max" && safeCapabilities.lzma2Offline?.available) {
     const compressed = await runCommand("7z", ["a", "-an", "-txz", "-mx=9", "-si", "-so"], buffer);
     if (compressed.length < buffer.length) {
@@ -63,9 +110,9 @@ async function compressBuffer(buffer, behavior, capabilities) {
   }
 
   const argsByBehavior = {
-    fast: ["-q", "-T0", "-3", "--stdout"],
-    balanced: ["-q", "-T0", "-12", "--long=27", "--stdout"],
-    max: ["-q", "-T0", "-19", "--long=31", "--stdout"]
+    fast: ["-q", "-T1", "-3", "--stdout"],
+    balanced: ["-q", "-T1", "-5", "--stdout"],
+    max: ["-q", "-T1", "-9", "--stdout"]
   };
   const args = argsByBehavior[behavior] ?? argsByBehavior.balanced;
   const compressed = await runCommand("zstd", args, buffer);
@@ -123,13 +170,14 @@ class ObjectStore {
     this.dirtyBuckets.clear();
   }
 
-  async storeFile(sourcePath, behavior) {
+  async storeFile(sourcePath, behavior, options = {}) {
     const refs = [];
     let newChunks = 0;
     let reusedChunks = 0;
     let storedBytes = 0;
     let totalSize = 0;
     const contentHash = crypto.createHash("sha256");
+    const compressible = shouldCompressArtifact(sourcePath, options);
 
     for await (const chunk of chunkFile(sourcePath)) {
       const prefix = chunk.hash.slice(0, 2);
@@ -140,7 +188,7 @@ class ObjectStore {
       totalSize += chunk.buffer.length;
 
       if (!object) {
-        const compressed = await compressBuffer(chunk.buffer, behavior, this.capabilities);
+        const compressed = await compressBuffer(chunk.buffer, behavior, this.capabilities, { compressible });
         const encrypted = await encryptPayload(compressed.buffer, this.session.archiveKey);
         const storageId = createStorageId();
         const filePath = storageIdToPath(this.session.path, storageId);

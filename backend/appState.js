@@ -7,7 +7,9 @@ const DEFAULT_SETTINGS = {
   videoTargetResolution: "1080p",
   compressionBehavior: "balanced",
   optimizationMode: "visually_lossless",
-  upscaleEnabled: true,
+  upscaleEnabled: false,
+  videoUpscaleEnabled: false,
+  videoInterpolationFrameTarget: "off",
   stripDerivativeMetadata: true,
   deleteOriginalFilesAfterSuccessfulUpload: true,
   argonProfile: "balanced",
@@ -16,6 +18,12 @@ const DEFAULT_SETTINGS = {
   sessionLockOnHide: false
 };
 const SUPPORTED_MANIFEST_VERSION = 3;
+const IMAGE_TARGET_RESOLUTIONS = new Set(["1080p", "1440p", "4k"]);
+const VIDEO_TARGET_RESOLUTIONS = new Set(["1080p", "1440p", "4k"]);
+const COMPRESSION_BEHAVIORS = new Set(["fast", "balanced", "max"]);
+const OPTIMIZATION_MODES = new Set(["lossless", "visually_lossless", "pick_per_file"]);
+const ARGON_PROFILES = new Set(["balanced", "strong", "constrained"]);
+const VIDEO_INTERPOLATION_FRAME_TARGETS = new Set(["off", "30", "60", "120"]);
 
 const DETECTED_ARCHIVE_SKIP_DIRS = new Set([
   ".cache",
@@ -193,16 +201,63 @@ async function readJsonIfExists(filePath, fallback) {
   }
 }
 
+function normalizeEnum(value, allowed, fallback) {
+  return typeof value === "string" && allowed.has(value) ? value : fallback;
+}
+
+function normalizeBoolean(value, fallback) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeInteger(value, fallback, min = 0) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(min, Math.round(value));
+}
+
+function normalizeSettings(nextSettings, defaultArchiveRoot) {
+  const source = nextSettings && typeof nextSettings === "object" ? nextSettings : {};
+  return {
+    imageTargetResolution: normalizeEnum(source.imageTargetResolution, IMAGE_TARGET_RESOLUTIONS, DEFAULT_SETTINGS.imageTargetResolution),
+    videoTargetResolution: normalizeEnum(source.videoTargetResolution, VIDEO_TARGET_RESOLUTIONS, DEFAULT_SETTINGS.videoTargetResolution),
+    compressionBehavior: normalizeEnum(source.compressionBehavior, COMPRESSION_BEHAVIORS, DEFAULT_SETTINGS.compressionBehavior),
+    optimizationMode: normalizeEnum(source.optimizationMode, OPTIMIZATION_MODES, DEFAULT_SETTINGS.optimizationMode),
+    upscaleEnabled: normalizeBoolean(source.upscaleEnabled, DEFAULT_SETTINGS.upscaleEnabled),
+    videoUpscaleEnabled: normalizeBoolean(source.videoUpscaleEnabled, DEFAULT_SETTINGS.videoUpscaleEnabled),
+    videoInterpolationFrameTarget: normalizeEnum(
+      source.videoInterpolationFrameTarget,
+      VIDEO_INTERPOLATION_FRAME_TARGETS,
+      DEFAULT_SETTINGS.videoInterpolationFrameTarget
+    ),
+    stripDerivativeMetadata: normalizeBoolean(source.stripDerivativeMetadata, DEFAULT_SETTINGS.stripDerivativeMetadata),
+    deleteOriginalFilesAfterSuccessfulUpload: normalizeBoolean(
+      source.deleteOriginalFilesAfterSuccessfulUpload,
+      DEFAULT_SETTINGS.deleteOriginalFilesAfterSuccessfulUpload
+    ),
+    argonProfile: normalizeEnum(source.argonProfile, ARGON_PROFILES, DEFAULT_SETTINGS.argonProfile),
+    preferredArchiveRoot:
+      typeof source.preferredArchiveRoot === "string" && source.preferredArchiveRoot.trim().length > 0
+        ? source.preferredArchiveRoot
+        : defaultArchiveRoot,
+    sessionIdleMinutes: normalizeInteger(source.sessionIdleMinutes, DEFAULT_SETTINGS.sessionIdleMinutes, 0),
+    sessionLockOnHide: normalizeBoolean(source.sessionLockOnHide, DEFAULT_SETTINGS.sessionLockOnHide)
+  };
+}
+
 async function createInitialState(userDataPath, homeDir) {
   await ensureDir(userDataPath);
   const settingsPath = path.join(userDataPath, "settings.json");
   const defaultArchiveRoot = path.join(homeDir, "Stow Archives");
   await ensureDir(defaultArchiveRoot);
-  const settings = {
-    ...DEFAULT_SETTINGS,
-    preferredArchiveRoot: defaultArchiveRoot,
-    ...(await readJsonIfExists(settingsPath, {}))
-  };
+  const settings = normalizeSettings(
+    {
+      ...DEFAULT_SETTINGS,
+      preferredArchiveRoot: defaultArchiveRoot,
+      ...(await readJsonIfExists(settingsPath, {}))
+    },
+    defaultArchiveRoot
+  );
 
   return {
     userDataPath,
@@ -295,5 +350,6 @@ module.exports = {
   collectArchivesWithinRoot,
   collectDetectedArchives,
   createInitialState,
+  normalizeSettings,
   sanitizeShellState
 };

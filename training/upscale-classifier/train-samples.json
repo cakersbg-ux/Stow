@@ -1,0 +1,533 @@
+[
+  {
+    "id": "train_1",
+    "route": "photo_gentle",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/selfie_segmentation.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_2",
+    "route": "photo_gentle",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/selfie_segmentation_landscape.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_3",
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/savanna.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_4",
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/house.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_5",
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/cityscapes.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_6",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Jabi_Lake_seen_from_Jabi_Lake_mall_01.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_7",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/a/a0/Jabi_Lake_seen_from_Jabi_Lake_mall_02.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_8",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/e/e0/Cannon_Beach_October_2019_panorama_2.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_9",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/5/5f/Phra_Nang_beach_panorama_edit.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_10",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/4/41/White_house_with_a_small_beach_in_Norra_Grundsund%2C_panorama.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_11",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/9/91/San_Francisco_City_Hall_as_seen_from_100_Van_Ness_at_dusk_%28wide%29.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_12",
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/tiger.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_13",
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/butterfly.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_14",
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/bread.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_15",
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/beetle.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_16",
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/sam-car.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_17",
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/artemis.jpeg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_18",
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/vitmatte_image.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_19",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/9/97/Sarn_v_Bronington_football_match_%281529912%29.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_20",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/b/b6/Sarn_v_Bronington_football_match_%281529913%29.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_21",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/5/5b/Sarn_v_Bronington_football_match_%281529914%29.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_22",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/2/25/Christmas_market_crowd_-_geograph.org.uk_-_4288737.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_23",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/4/4e/Group_photo_of_the_participants_at_WikiOutdoor_Training_2024_%28waving%29.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_24",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/3/30/City_Square%2C_Leeds.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_25",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/e/ee/Male_Corgi-Dachshund_mix_drinking_water.JPG",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_26",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/2/24/11_week_old_male_Pembroke_Welsh_Corgi_jaw.JPG",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_27",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/3/3d/11_week_old_male_Pembroke_Welsh_Corgi_jaw_open.JPG",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_28",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/6/69/Cat_Indoors.JPG",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_29",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/a/a3/Cat%2C_indoors%2C_seated_on_the_plush_cushion_of_a_window_seat%2C_ca._1905-1910_%2818739075465%29.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_30",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/e/ec/Concert_Crowd_-_Odense.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_31",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/7/7e/Crowd_at_Noam_Rotem_concert.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_32",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/9/97/20230519_Group_Photo_%2852975150248%29.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_33",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/8/88/Family_group_outdoors_%282677414099%29.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_34",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/a/ac/221000_-_Football_David_Barber_action_-_3b_-_Sydney_2000_match_photo.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_35",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/4/4f/221000_-_Football_Jason_Rand_action_-_3b_-_Sydney_2000_match_photo.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_36",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/4/4b/251000_-_Football_David_Barber_action_-_3b_-_Sydney_2000_match_photo.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_37",
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/3/30/271000_-_Football_Jason_Rand_action_-_3b_-_Sydney_2000_match_photo.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
+  },
+  {
+    "id": "train_38",
+    "route": "art_clean",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/weather-events-diagram.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_39",
+    "route": "art_clean",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/meme.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_40",
+    "route": "art_clean",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/cross-icon.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_41",
+    "route": "art_clean",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/upload-icon.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_42",
+    "route": "art_clean",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/vitmatte_trimap.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_43",
+    "route": "art_anime",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/anime-2.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_44",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/js-detection-console.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_45",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/scientific_publication.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_46",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/pubtables.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_47",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/nougat_paper.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_48",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/ocr-demo.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_49",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/quadratic_formula.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_50",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/latex.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_51",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/latex2.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_52",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/handwriting.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_53",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/handwritten-math.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_54",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/js-detection-btn.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_55",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/js-detection-btn-img.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_56",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/js-detection-inference-elephant.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_57",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/js-detection-interence-zebra.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_58",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/next-demo.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  },
+  {
+    "id": "train_59",
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/semantic-image-search-min.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
+  }
+]

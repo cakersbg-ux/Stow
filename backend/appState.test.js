@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { collectArchivesWithinRoot, collectDetectedArchives } = require("./appState");
+const { collectArchivesWithinRoot, collectDetectedArchives, createInitialState } = require("./appState");
 
 async function withTempDir(run) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-app-state-"));
@@ -41,5 +41,32 @@ test("archive scans only include supported v3 archives", async () => {
     assert.equal(detected.length, 1);
     assert.equal(detected[0]?.name, "compatible");
     assert.equal(detected[0]?.path, path.join(tempDir, "compatible.stow"));
+  });
+});
+
+test("initial state keeps image and video AI upscaling disabled by default", async () => {
+  await withTempDir(async (tempDir) => {
+    const state = await createInitialState(path.join(tempDir, "user-data"), tempDir);
+    assert.equal(state.settings.upscaleEnabled, false);
+    assert.equal(state.settings.videoUpscaleEnabled, false);
+    assert.equal(state.settings.videoInterpolationFrameTarget, "off");
+  });
+});
+
+test("initial state normalizes invalid interpolation targets from settings.json", async () => {
+  await withTempDir(async (tempDir) => {
+    const userDataPath = path.join(tempDir, "user-data");
+    await fs.mkdir(userDataPath, { recursive: true });
+    await fs.writeFile(
+      path.join(userDataPath, "settings.json"),
+      JSON.stringify({
+        videoInterpolationFrameTarget: "240",
+        preferredArchiveRoot: ""
+      })
+    );
+
+    const state = await createInitialState(userDataPath, tempDir);
+    assert.equal(state.settings.videoInterpolationFrameTarget, "off");
+    assert.equal(state.settings.preferredArchiveRoot, path.join(tempDir, "Stow Archives"));
   });
 });

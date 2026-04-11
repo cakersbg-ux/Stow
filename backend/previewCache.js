@@ -31,11 +31,24 @@ async function walkFiles(dirPath) {
   return files;
 }
 
+async function measureDirBytes(dirPath) {
+  const files = await walkFiles(dirPath);
+  let total = 0;
+  for (const filePath of files) {
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (stat?.isFile()) {
+      total += stat.size;
+    }
+  }
+  return total;
+}
+
 class PreviewCache {
   constructor(options) {
     this.baseDir = options.baseDir;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
+    this.currentBytes = 0;
   }
 
   async initialize() {
@@ -65,6 +78,9 @@ class PreviewCache {
         await this.deletePreviewDir(key);
         return null;
       }
+      const now = new Date();
+      await fs.utimes(descriptor.path, now, now).catch(() => {});
+      await fs.utimes(metadataPath, now, now).catch(() => {});
       return descriptor;
     } catch (_error) {
       await this.deletePreviewDir(key);
@@ -74,14 +90,21 @@ class PreviewCache {
 
   async writeDescriptor(key, descriptor) {
     const dir = this.previewDir(key);
+    const beforeBytes = await measureDirBytes(dir).catch(() => 0);
     await ensureDir(dir);
     await fs.writeFile(this.metadataPath(key), JSON.stringify(descriptor, null, 2));
-    await this.cleanup();
+    const afterBytes = await measureDirBytes(dir).catch(() => beforeBytes);
+    this.currentBytes = Math.max(0, this.currentBytes - beforeBytes + afterBytes);
+    if (this.currentBytes > this.maxBytes) {
+      await this.cleanup();
+    }
     return descriptor;
   }
 
   async deletePreviewDir(key) {
+    const removedBytes = await measureDirBytes(this.previewDir(key)).catch(() => 0);
     await fs.rm(this.previewDir(key), { recursive: true, force: true }).catch(() => {});
+    this.currentBytes = Math.max(0, this.currentBytes - removedBytes);
   }
 
   async cleanup() {
@@ -105,6 +128,7 @@ class PreviewCache {
       stats.push({ filePath, size: stat.size, mtimeMs: stat.mtimeMs });
     }
 
+    this.currentBytes = totalBytes;
     if (totalBytes <= this.maxBytes) {
       return;
     }
@@ -117,6 +141,7 @@ class PreviewCache {
       await fs.rm(stat.filePath, { force: true }).catch(() => {});
       totalBytes -= stat.size;
     }
+    this.currentBytes = Math.max(0, totalBytes);
   }
 }
 

@@ -2,16 +2,44 @@
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
+
+const SUPPORTED_MANIFEST_VERSION: i64 = 3;
+const DETECTED_ARCHIVE_SKIP_DIRS: &[&str] = &[
+    ".cache",
+    ".cargo",
+    ".git",
+    ".npm",
+    ".pnpm",
+    ".rustup",
+    ".venv",
+    ".yarn",
+    "Applications",
+    "AppData",
+    "Caches",
+    "build",
+    "coverage",
+    "dist",
+    "Library",
+    "node_modules",
+    "private",
+    "System",
+    "target",
+    "tmp",
+    "venv",
+];
 
 struct BackendBridge {
     child: Arc<Mutex<Child>>,
@@ -226,6 +254,258 @@ struct AppState {
     backend: Arc<BackendBridge>,
 }
 
+fn should_skip_detected_dir(name: &str) -> bool {
+    DETECTED_ARCHIVE_SKIP_DIRS.iter().any(|candidate| candidate == &name)
+}
+
+fn system_time_to_millis(value: SystemTime) -> i64 {
+    value.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn system_time_to_rfc3339(value: SystemTime) -> String {
+    OffsetDateTime::from(value)
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn ensure_archive_index(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS detected_archives (
+            path TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            last_modified_ms INTEGER NOT NULL,
+            last_modified_at TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            last_scanned_at TEXT NOT NULL
+        )",
+        [],
+    )
+    .map_err(|error| format!("failed to initialize archive index: {error}"))?;
+    Ok(())
+}
+
+fn is_supported_archive_version(archive_path: &Path) -> bool {
+    let manifest_path = archive_path.join("manifest.json");
+    let Ok(manifest_raw) = fs::read_to_string(manifest_path) else {
+        return false;
+    };
+    let Ok(manifest) = serde_json::from_str::<Value>(&manifest_raw) else {
+        return false;
+    };
+    manifest
+        .get("version")
+        .and_then(Value::as_i64)
+        .map(|version| version == SUPPORTED_MANIFEST_VERSION)
+        .unwrap_or(false)
+}
+
+fn collect_directory_size(dir_path: &Path) -> u64 {
+    let mut total = 0_u64;
+    let mut stack = vec![dir_path.to_path_buf()];
+
+    while let Some(current_path) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&current_path) else {
+            continue;
+        };
+
+        for entry_result in entries {
+            let Ok(entry) = entry_result else {
+                continue;
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            let entry_path = entry.path();
+            if file_type.is_dir() {
+                stack.push(entry_path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            if let Ok(metadata) = entry.metadata() {
+                total = total.saturating_add(metadata.len());
+            }
+        }
+    }
+
+    total
+}
+
+fn cached_archive_size(
+    conn: &Connection,
+    archive_path: &str,
+    last_modified_ms: i64,
+) -> Result<Option<u64>, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT size_bytes FROM detected_archives
+             WHERE path = ?1 AND last_modified_ms = ?2",
+        )
+        .map_err(|error| format!("failed to prepare archive cache lookup: {error}"))?;
+
+    let cached = statement
+        .query_row(params![archive_path, last_modified_ms], |row| row.get::<_, i64>(0))
+        .optional()
+        .map_err(|error| format!("failed to query archive cache: {error}"))?;
+
+    Ok(cached.map(|value| value.max(0) as u64))
+}
+
+fn upsert_detected_archive(
+    conn: &Connection,
+    archive_path: &str,
+    name: &str,
+    last_modified_ms: i64,
+    last_modified_at: &str,
+    size_bytes: u64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO detected_archives (
+            path,
+            name,
+            last_modified_ms,
+            last_modified_at,
+            size_bytes,
+            last_scanned_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        ON CONFLICT(path) DO UPDATE SET
+            name = excluded.name,
+            last_modified_ms = excluded.last_modified_ms,
+            last_modified_at = excluded.last_modified_at,
+            size_bytes = excluded.size_bytes,
+            last_scanned_at = excluded.last_scanned_at",
+        params![
+            archive_path,
+            name,
+            last_modified_ms,
+            last_modified_at,
+            size_bytes as i64,
+            system_time_to_rfc3339(SystemTime::now())
+        ],
+    )
+    .map_err(|error| format!("failed to update archive cache: {error}"))?;
+    Ok(())
+}
+
+fn prune_missing_detected_archives(conn: &Connection, seen_paths: &HashSet<String>) -> Result<(), String> {
+    let mut statement = conn
+        .prepare("SELECT path FROM detected_archives")
+        .map_err(|error| format!("failed to prepare archive cache pruning query: {error}"))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("failed to read archive cache rows: {error}"))?;
+
+    for row in rows {
+        let cached_path = row.map_err(|error| format!("failed to decode cached archive path: {error}"))?;
+        if seen_paths.contains(&cached_path) {
+            continue;
+        }
+        conn.execute(
+            "DELETE FROM detected_archives WHERE path = ?1",
+            params![cached_path],
+        )
+        .map_err(|error| format!("failed to prune archive cache entry: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn collect_detected_archives(root_path: &Path, conn: &Connection) -> Result<Vec<Value>, String> {
+    let mut stack = vec![(root_path.to_path_buf(), String::new())];
+    let mut archives = Vec::new();
+    let mut seen_paths = HashSet::new();
+
+    while let Some((current_path, relative_prefix)) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&current_path) else {
+            continue;
+        };
+
+        for entry_result in entries {
+            let Ok(entry) = entry_result else {
+                continue;
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let name = entry.file_name().to_string_lossy().to_string();
+            if should_skip_detected_dir(&name) {
+                continue;
+            }
+            if name.starts_with('.') && !name.ends_with(".stow") {
+                continue;
+            }
+
+            let archive_path = entry.path();
+            let relative_path = if relative_prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{relative_prefix}/{name}")
+            };
+
+            if name.ends_with(".stow") {
+                if !is_supported_archive_version(&archive_path) {
+                    continue;
+                }
+
+                let metadata = entry
+                    .metadata()
+                    .map_err(|error| format!("failed to read archive metadata for {}: {error}", archive_path.display()))?;
+                let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+                let last_modified_ms = system_time_to_millis(modified);
+                let last_modified_at = system_time_to_rfc3339(modified);
+                let archive_path_string = archive_path.to_string_lossy().to_string();
+                let archive_name = relative_path.trim_end_matches(".stow").to_string();
+                let size_bytes = if let Some(cached_size) =
+                    cached_archive_size(conn, &archive_path_string, last_modified_ms)?
+                {
+                    cached_size
+                } else {
+                    collect_directory_size(&archive_path)
+                };
+
+                upsert_detected_archive(
+                    conn,
+                    &archive_path_string,
+                    &archive_name,
+                    last_modified_ms,
+                    &last_modified_at,
+                    size_bytes,
+                )?;
+
+                seen_paths.insert(archive_path_string.clone());
+                archives.push(json!({
+                    "path": archive_path_string,
+                    "name": archive_name,
+                    "lastModifiedAt": last_modified_at,
+                    "sizeBytes": size_bytes
+                }));
+                continue;
+            }
+
+            stack.push((archive_path, relative_path));
+        }
+    }
+
+    prune_missing_detected_archives(conn, &seen_paths)?;
+    archives.sort_by(|left, right| {
+        let left_name = left.get("name").and_then(Value::as_str).unwrap_or("");
+        let right_name = right.get("name").and_then(Value::as_str).unwrap_or("");
+        left_name.cmp(right_name)
+    });
+
+    Ok(archives)
+}
+
 async fn backend_call(backend: Arc<BackendBridge>, method: &str, params: Value) -> Result<Value, String> {
     let method_name = method.to_string();
     tauri::async_runtime::spawn_blocking(move || backend.request(&method_name, params))
@@ -280,7 +560,7 @@ struct DeleteArchivePayload {
 #[serde(rename_all = "camelCase")]
 struct AddPathsPayload {
     paths: Vec<String>,
-    manual_classifications: Option<HashMap<String, String>>,
+    manual_routes: Option<HashMap<String, String>>,
 }
 
 #[derive(Deserialize)]
@@ -288,6 +568,7 @@ struct AddPathsPayload {
 struct ReprocessEntryPayload {
     entry_id: String,
     override_mode: String,
+    route_override: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -465,8 +746,27 @@ async fn archives_delete(state: State<'_, AppState>, payload: DeleteArchivePaylo
 }
 
 #[tauri::command]
-async fn archives_list_detected(state: State<'_, AppState>) -> Result<Value, String> {
-    backend_call(Arc::clone(&state.backend), "archives:list-detected", Value::Null).await
+async fn archives_list_detected(app: AppHandle) -> Result<Value, String> {
+    let home_dir = app
+        .path()
+        .home_dir()
+        .map_err(|error| format!("failed to resolve home directory: {error}"))?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve app data dir: {error}"))?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        fs::create_dir_all(&app_data_dir)
+            .map_err(|error| format!("failed to create app data dir: {error}"))?;
+        let db_path = app_data_dir.join("archive-index.sqlite3");
+        let conn = Connection::open(db_path)
+            .map_err(|error| format!("failed to open archive index database: {error}"))?;
+        ensure_archive_index(&conn)?;
+        collect_detected_archives(&home_dir, &conn).map(Value::Array)
+    })
+    .await
+    .map_err(|error| format!("archive scan task join failed: {error}"))?
 }
 
 #[tauri::command]
@@ -476,7 +776,7 @@ async fn archive_add_paths(state: State<'_, AppState>, payload: AddPathsPayload)
         "archive:add-paths",
         json!({
             "paths": payload.paths,
-            "manualClassifications": payload.manual_classifications
+            "manualRoutes": payload.manual_routes
         }),
     )
     .await
@@ -492,7 +792,8 @@ async fn archive_reprocess_entry(
         "archive:reprocess-entry",
         json!({
             "entryId": payload.entry_id,
-            "overrideMode": payload.override_mode
+            "overrideMode": payload.override_mode,
+            "routeOverride": payload.route_override
         }),
     )
     .await

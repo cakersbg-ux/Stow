@@ -25,7 +25,7 @@ Stow is a local-first desktop archive utility for files, images, and video. It k
 - Apply compression after dedupe and encryption after compression.
 - Keep originals for archival correctness and generate optimized derivatives when the chosen rules allow it.
 - Generate JPEG XL derivatives for images when `cjxl` is present.
-- Automatically classify media with a distilled router model and route image/video upscaling through `realesrgan-ncnn-vulkan`, `realcugan-ncnn-vulkan`, or `waifu2x-ncnn-vulkan` depending on the content.
+- Automatically classify media with the `Stout` router model and route image/video upscaling through `realesrgan-ncnn-vulkan`, `realcugan-ncnn-vulkan`, or `waifu2x-ncnn-vulkan` depending on the content.
 - Generate FFV1 archival masters or AV1 access copies for video when the source/tooling allows it.
 - Reprocess a selected entry with a per-file override between lossless and visually lossless.
 - Export either the preserved original or the latest optimized derivative.

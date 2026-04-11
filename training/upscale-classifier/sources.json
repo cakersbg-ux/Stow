@@ -1,38 +1,32 @@
 {
-  "version": 1,
-  "classes": [
+  "version": 2,
+  "routes": [
     {
-      "id": "portrait",
+      "id": "photo_gentle",
       "targetCount": 12000,
       "description": "Real photos dominated by one or more people, especially face-heavy or upper-body framing.",
       "preferredUpscalers": ["realEsrgan:realesrnet-x4plus", "realEsrgan:realesrgan-x4plus"]
     },
     {
-      "id": "landscape",
+      "id": "photo_general",
       "targetCount": 12000,
-      "description": "Real outdoor scenes, architecture, nature, streets, travel shots, and wide scenery.",
+      "description": "General real-world photography, including landscapes, architecture, nature, travel shots, and wide scenes.",
       "preferredUpscalers": ["realEsrgan:realesrgan-x4plus"]
     },
     {
-      "id": "photo",
-      "targetCount": 12000,
-      "description": "General real-world photography that is neither strongly portrait nor strongly landscape.",
-      "preferredUpscalers": ["realEsrgan:realesrgan-x4plus"]
-    },
-    {
-      "id": "illustration",
+      "id": "art_clean",
       "targetCount": 10000,
       "description": "Non-anime drawings, paintings, comics, posters, digital art, and graphic illustration.",
       "preferredUpscalers": ["waifu2x", "realCugan", "realEsrgan:realesrgan-x4plus-anime"]
     },
     {
-      "id": "anime",
+      "id": "art_anime",
       "targetCount": 10000,
       "description": "Anime and anime-adjacent still images with cel shading or line-art-heavy stylization.",
       "preferredUpscalers": ["realCugan", "waifu2x", "realEsrgan:realesrgan-x4plus-anime"]
     },
     {
-      "id": "ui_screenshot",
+      "id": "text_ui",
       "targetCount": 6000,
       "description": "Screenshots, UI captures, meme composites, and text-heavy graphics.",
       "preferredUpscalers": ["waifu2x", "realEsrgan:realesrgan-x4plus"]
@@ -45,7 +39,7 @@
       "license": "CC BY",
       "status": "approved",
       "url": "https://storage.googleapis.com/openimages/web/download_v7.html",
-      "useForClasses": ["portrait", "landscape", "photo"],
+      "useForRoutes": ["photo_gentle", "photo_general"],
       "notes": "Best starting point for real photos with large-scale labels and broad category coverage."
     },
     {
@@ -54,7 +48,7 @@
       "license": "Dataset-specific academic terms",
       "status": "review_required",
       "url": "https://places2.csail.mit.edu/",
-      "useForClasses": ["landscape", "photo"],
+      "useForRoutes": ["photo_general"],
       "notes": "High-value scene dataset for indoor/outdoor routing, but review terms before shipping a trained commercial classifier from it."
     },
     {
@@ -63,7 +57,7 @@
       "license": "Per-file; only ingest CC0, CC BY, CC BY-SA",
       "status": "approved_with_filtering",
       "url": "https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia/en",
-      "useForClasses": ["portrait", "landscape", "photo", "illustration", "ui_screenshot"],
+      "useForRoutes": ["photo_gentle", "photo_general", "art_clean", "text_ui"],
       "notes": "Use only files with clear reuse licenses and keep attribution metadata."
     },
     {
@@ -72,7 +66,7 @@
       "license": "CC0",
       "status": "approved",
       "url": "https://www.metmuseum.org/about-the-met/policies-and-documents/open-access",
-      "useForClasses": ["illustration"],
+      "useForRoutes": ["art_clean"],
       "notes": "Strong source for public-domain artwork and digitized collections."
     },
     {
@@ -81,7 +75,7 @@
       "license": "Open Access / public-domain works",
       "status": "approved",
       "url": "https://www.nga.gov/open-access-images.html",
-      "useForClasses": ["illustration"],
+      "useForRoutes": ["art_clean"],
       "notes": "Good museum-quality artwork source with reliable metadata."
     },
     {
@@ -90,7 +84,7 @@
       "license": "CC0",
       "status": "approved",
       "url": "https://www.si.edu/openaccess",
-      "useForClasses": ["illustration", "photo"],
+      "useForRoutes": ["art_clean", "photo_general"],
       "notes": "Useful for open public-domain imagery and mixed media."
     },
     {
@@ -99,7 +93,7 @@
       "license": "Open access",
       "status": "approved",
       "url": "https://www.artic.edu/open-access/open-access-images",
-      "useForClasses": ["illustration"],
+      "useForRoutes": ["art_clean"],
       "notes": "Another clean museum source for paintings, prints, posters, and drawings."
     },
     {
@@ -108,7 +102,7 @@
       "license": "Mixed / site-specific / legal review required",
       "status": "high_risk",
       "url": "https://danbooru.donmai.us/",
-      "useForClasses": ["anime"],
+      "useForRoutes": ["art_anime"],
       "notes": "Best practical anime-tag source for internal experiments, but not a clean commercial-source default."
     }
   ]

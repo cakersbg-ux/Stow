@@ -1,5 +1,6 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const sharp = require("sharp");
 
 const rootDir = path.resolve(__dirname, "..", "..");
@@ -23,13 +24,36 @@ async function readJsonLines(filePath) {
 }
 
 function extFromUrl(url) {
+  if (typeof url === "string" && path.isAbsolute(url)) {
+    return path.extname(url) || ".img";
+  }
   const pathname = new URL(url).pathname;
   return path.extname(pathname) || ".img";
 }
 
 function safeIdFromUrl(url) {
+  if (typeof url === "string" && path.isAbsolute(url)) {
+    return path.basename(url).replace(/[^a-z0-9._-]+/gi, "_");
+  }
   const pathname = new URL(url).pathname.split("/").pop() || "sample";
   return pathname.replace(/[^a-z0-9._-]+/gi, "_");
+}
+
+function normalizeSampleUrl(url) {
+  if (typeof url !== "string") {
+    return "";
+  }
+  if (path.isAbsolute(url)) {
+    return url;
+  }
+
+  const normalized = String(url)
+    .toLowerCase()
+    .replace(/_small(?=\.)/g, "")
+    .replace(/_medium(?=\.)/g, "")
+    .replace(/_large(?=\.)/g, "");
+
+  return normalized;
 }
 
 async function downloadFile(url, outputPath) {
@@ -60,6 +84,12 @@ async function downloadFile(url, outputPath) {
 }
 
 async function ensureSampleFile(url, bucket) {
+  if (typeof url === "string" && path.isAbsolute(url)) {
+    return url;
+  }
+  if (typeof url === "string" && url.startsWith("file://")) {
+    return new URL(url).pathname;
+  }
   const bucketDir = path.join(cacheRoot, bucket);
   await ensureDir(bucketDir);
   const outputPath = path.join(bucketDir, `${safeIdFromUrl(url)}${extFromUrl(url)}`);
@@ -69,6 +99,11 @@ async function ensureSampleFile(url, bucket) {
     await downloadFile(url, outputPath);
   }
   return outputPath;
+}
+
+async function hashFile(filePath) {
+  const buffer = await fs.readFile(filePath);
+  return crypto.createHash("sha256").update(buffer).digest("hex");
 }
 
 async function ensureAugmentedImageSet(sourcePath, key, options = {}) {
@@ -149,6 +184,8 @@ module.exports = {
   ensureAugmentedImageSet,
   ensureDir,
   ensureSampleFile,
+  hashFile,
+  normalizeSampleUrl,
   readJson,
   readJsonLines
 };

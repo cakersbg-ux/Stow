@@ -51,12 +51,12 @@ const INSTALLABLE_TOOLS = [
   },
   {
     key: "upscaleRouterModel",
-    label: "Upscale Router Model",
+    label: "Stout Model",
     probes: [],
     managedAsset: "model_quantized.onnx",
     managedVersion: "Xenova/resnet-18 quantized",
     installCandidates: ["managed:resnet18Classifier"],
-    reason: "distilled classifier backbone not detected"
+    reason: "Stout backbone not detected"
   },
   {
     key: "lzma2Offline",
@@ -96,7 +96,8 @@ function makeSpawnOptions(options = {}) {
     env: {
       ...process.env,
       PATH: mergePath(options.extraPaths || [])
-    }
+    },
+    ...(options.cwd ? { cwd: options.cwd } : {})
   };
 }
 
@@ -514,17 +515,17 @@ async function installManagedWaifu2x(options = {}) {
 async function installManagedResnet18Classifier(options = {}) {
   const targetRoot = managedPackageDir("upscaleRouterModel", options);
   if (!targetRoot) {
-    throw new Error("Cannot determine install directory for upscale router model");
+    throw new Error("Cannot determine install directory for the Stout model");
   }
 
   await ensureDir(targetRoot);
   const targetPath = path.join(targetRoot, "model_quantized.onnx");
   if (await pathExists(BUNDLED_UPSCALE_ROUTER_MODEL_PATH)) {
     await fs.copyFile(BUNDLED_UPSCALE_ROUTER_MODEL_PATH, targetPath);
-    return "installed distilled router backbone from bundled asset";
+    return "installed Stout backbone from bundled asset";
   }
   await downloadToFile("https://huggingface.co/Xenova/resnet-18/resolve/main/onnx/model_quantized.onnx", targetPath);
-  return "installed distilled router backbone (Xenova/resnet-18 quantized)";
+  return "installed Stout backbone (Xenova/resnet-18 quantized)";
 }
 
 async function installManagedTool(name, options = {}) {
@@ -710,7 +711,10 @@ async function probeManagedTool(tool, options = {}) {
 
   const executablePath = managedExecutablePath(tool, options);
   if (executablePath && (await pathExists(executablePath))) {
-    const summary = await runCommandSummary(executablePath, ["-h"], options);
+    const summary = await runCommandSummary(executablePath, ["-h"], {
+      ...options,
+      cwd: path.dirname(executablePath)
+    });
     if (!summary) {
       return null;
     }

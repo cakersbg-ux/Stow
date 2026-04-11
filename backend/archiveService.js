@@ -5,7 +5,7 @@ const { spawn } = require("node:child_process");
 const { v4: uuid } = require("uuid");
 const mime = require("mime-types");
 const { createArchiveEncryption, unlockArchiveKey } = require("./crypto");
-const { DEFAULT_SETTINGS, collectArchivesWithinRoot } = require("./appState");
+const { DEFAULT_SETTINGS, collectArchivesWithinRoot, normalizeSettings } = require("./appState");
 const {
   createArchiveCatalog,
   deleteEntryCatalog,
@@ -14,13 +14,14 @@ const {
   saveRootCatalog,
   writeEntryCatalog
 } = require("./catalogStore");
-const { analyzePath, classifyPath, generatePreviewFile, inspectManualClassificationRequirement, VISUAL_CLASSIFICATION_CATEGORIES } = require("./mediaTools");
+const { UPSCALE_ROUTES, analyzePath, classifyPath, generatePreviewFile, inspectManualRoutingRequirement } = require("./mediaTools");
 const { ObjectStore } = require("./objectStore");
 const { PreviewCache } = require("./previewCache");
 
 const SESSION_IDLE_MINUTES_DEFAULT = 0;
 const SESSION_IDLE_MINUTES_MAX = 24 * 60;
 const OPEN_TEMP_DIRNAME = "open-files";
+const PREVIEW_KINDS = ["thumbnail", "preview"];
 
 async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
@@ -224,15 +225,15 @@ function buildEntryDetail(entry) {
   };
 }
 
-function buildManualClassificationRequestItem(file, requirement) {
+function buildManualRoutingRequestItem(file, requirement) {
   return {
     absolutePath: file.absolutePath,
     relativePath: file.relativePath,
     mediaType: requirement.mediaType,
     failureCode: requirement.failureCode,
     reason: requirement.message,
-    suggestedCategory: requirement.suggestedCategory ?? null,
-    choices: VISUAL_CLASSIFICATION_CATEGORIES
+    suggestedRoute: requirement.suggestedRoute ?? null,
+    choices: UPSCALE_ROUTES
   };
 }
 
@@ -256,6 +257,51 @@ class ArchiveService {
     await this.cleanupOpenTempArtifacts();
   }
 
+  previewKey(entryId, revisionId, kind) {
+    const session = this.requireArchiveSession();
+    return {
+      archiveId: session.root.archiveId,
+      entryId,
+      revisionId,
+      kind
+    };
+  }
+
+  async cacheRevisionPreviews(entryId, revisionId, fileKind, sourcePath) {
+    if (!sourcePath || !["image", "video"].includes(fileKind)) {
+      return;
+    }
+
+    try {
+      for (const kind of PREVIEW_KINDS) {
+        const key = this.previewKey(entryId, revisionId, kind);
+        const outputDir = this.previewCache.previewDir(key);
+        await ensureDir(outputDir);
+        const preview = await generatePreviewFile(sourcePath, fileKind, kind, outputDir);
+        if (!preview) {
+          continue;
+        }
+
+        await this.previewCache.writeDescriptor(key, {
+          path: preview.path,
+          mime: preview.mime,
+          revisionId,
+          kind
+        });
+      }
+    } catch (error) {
+      this.pushLog(
+        `failed to cache previews for revision ${revisionId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  async deleteEntryPreviewArtifacts(entry) {
+    for (const revision of entry?.revisions || []) {
+      await this.previewCache.deletePreviewDir(this.previewKey(entry.id, revision.id, "preview"));
+    }
+  }
+
   pushLog(message) {
     const stamped = `${new Date().toISOString()} ${message}`;
     this.state.logs.push(stamped);
@@ -266,18 +312,18 @@ class ArchiveService {
     }
   }
 
-  async recordManualClassificationFeedback(files, manualClassifications) {
+  async recordManualRouteFeedback(files, manualRoutes) {
     if (!this.state.upscaleRouterFeedbackPath || !this.state.upscaleRouterFeedbackSamplesPath) {
       return;
     }
 
-    const selectedFiles = files.filter((file) => manualClassifications[file.absolutePath]);
+    const selectedFiles = files.filter((file) => manualRoutes[file.absolutePath]);
     if (!selectedFiles.length) {
       return;
     }
 
     for (const file of selectedFiles) {
-      const label = manualClassifications[file.absolutePath];
+      const route = manualRoutes[file.absolutePath];
       const mediaType = classifyPath(file.absolutePath);
       if (mediaType !== "image" && mediaType !== "video") {
         continue;
@@ -297,7 +343,7 @@ class ArchiveService {
           sourcePath: file.absolutePath,
           relativePath: file.relativePath,
           mediaType,
-          label,
+          route,
           samplePath: preview.path,
           sampleMime: preview.mime
         });
@@ -496,6 +542,7 @@ class ArchiveService {
       session.root.entryOrder = session.root.entryOrder.filter((candidate) => candidate !== entryId);
       session.root.stats.entryCount = Math.max(0, session.root.stats.entryCount - 1);
       session.root.stats.logicalBytes = Math.max(0, session.root.stats.logicalBytes - entry.size);
+      await this.deleteEntryPreviewArtifacts(entry);
       await session.objectStore.releaseEntry(entry);
       session.entryCache.delete(entryId);
       await deleteEntryCatalog(session.path, entryId);
@@ -556,20 +603,26 @@ class ArchiveService {
   }
 
   async saveSettings(settings) {
-    this.state.settings = {
-      ...this.state.settings,
-      ...settings
-    };
+    this.state.settings = normalizeSettings(
+      {
+        ...this.state.settings,
+        ...settings
+      },
+      this.state.defaultArchiveRoot
+    );
     this.refreshSessionState();
     this.scheduleAutoLockTimer();
     await writeJson(this.state.settingsPath, this.state.settings);
   }
 
   async resetSettings() {
-    this.state.settings = {
-      ...DEFAULT_SETTINGS,
-      preferredArchiveRoot: this.state.defaultArchiveRoot
-    };
+    this.state.settings = normalizeSettings(
+      {
+        ...DEFAULT_SETTINGS,
+        preferredArchiveRoot: this.state.defaultArchiveRoot
+      },
+      this.state.defaultArchiveRoot
+    );
     this.refreshSessionState();
     this.scheduleAutoLockTimer();
     await writeJson(this.state.settingsPath, this.state.settings);
@@ -612,10 +665,13 @@ class ArchiveService {
     }
 
     await ensureDir(archivePath);
-    const mergedPreferences = {
-      ...this.state.settings,
-      ...preferences
-    };
+    const mergedPreferences = normalizeSettings(
+      {
+        ...this.state.settings,
+        ...preferences
+      },
+      this.state.defaultArchiveRoot
+    );
     const encryption = await createArchiveEncryption(password, mergedPreferences.argonProfile);
     const { manifestEnvelope, root } = await createArchiveCatalog({
       archivePath,
@@ -686,7 +742,7 @@ class ArchiveService {
     await this.lockArchive("manually locked archive session");
   }
 
-  async addPaths(paths, manualClassifications = {}) {
+  async addPaths(paths, manualRoutes = {}) {
     this.requireArchiveSession();
     this.beginSessionOperation();
     try {
@@ -694,10 +750,9 @@ class ArchiveService {
       let completedFiles = 0;
       let ingestedAny = false;
       const uploadedSourcePaths = new Set();
-      const normalizedManualClassifications =
-        manualClassifications && typeof manualClassifications === "object" ? manualClassifications : {};
+      const normalizedManualRoutes = manualRoutes && typeof manualRoutes === "object" ? manualRoutes : {};
       const inputFiles = await collectInputFiles(paths);
-      await this.recordManualClassificationFeedback(inputFiles, normalizedManualClassifications);
+      await this.recordManualRouteFeedback(inputFiles, normalizedManualRoutes);
 
       const ingestResult = await withTempDir("stow-ingest-", async (tempDir) => {
         this.emitProgress({
@@ -708,21 +763,21 @@ class ArchiveService {
           totalFiles: null
         });
 
-        const manualClassificationItems = [];
+        const manualRoutingItems = [];
         for (const file of inputFiles) {
-          const requirement = await inspectManualClassificationRequirement(
+          const requirement = await inspectManualRoutingRequirement(
             file.absolutePath,
             session.root.preferences,
             this.state.capabilities,
             tempDir,
-            normalizedManualClassifications[file.absolutePath] ?? null
+            normalizedManualRoutes[file.absolutePath] ?? null
           );
           if (requirement) {
-            manualClassificationItems.push(buildManualClassificationRequestItem(file, requirement));
+            manualRoutingItems.push(buildManualRoutingRequestItem(file, requirement));
           }
         }
 
-        if (manualClassificationItems.length) {
+        if (manualRoutingItems.length) {
           this.emitProgress({
             active: false,
             phase: "processing",
@@ -731,8 +786,8 @@ class ArchiveService {
             totalFiles: inputFiles.length
           });
           return {
-            manualClassificationRequest: {
-              items: manualClassificationItems
+            manualRoutingRequest: {
+              items: manualRoutingItems
             }
           };
         }
@@ -754,13 +809,13 @@ class ArchiveService {
             tempDir,
             existingEntryId: null,
             overrideMode: null,
-            manualClassification: normalizedManualClassifications[file.absolutePath] ?? null
+            manualRoute: normalizedManualRoutes[file.absolutePath] ?? null
           });
           completedFiles += 1;
         }
 
         return {
-          manualClassificationRequest: null
+          manualRoutingRequest: null
         };
       });
 
@@ -772,13 +827,13 @@ class ArchiveService {
         totalFiles: completedFiles
       });
 
-      if (ingestResult?.manualClassificationRequest) {
+      if (ingestResult?.manualRoutingRequest) {
         return ingestResult;
       }
 
       if (!ingestedAny) {
         return {
-          manualClassificationRequest: null
+          manualRoutingRequest: null
         };
       }
 
@@ -792,7 +847,7 @@ class ArchiveService {
         selectedEntryId: session.root.entryOrder[0] || null
       });
       return {
-        manualClassificationRequest: null
+        manualRoutingRequest: null
       };
     } finally {
       this.endSessionOperation();
@@ -837,28 +892,37 @@ class ArchiveService {
     return [dedupeAction, compressionAction];
   }
 
-  async ingestSource({ absolutePath, relativePath, tempDir, existingEntryId, overrideMode, manualClassification = null }) {
+  async ingestSource({ absolutePath, relativePath, tempDir, existingEntryId, overrideMode, manualRoute = null }) {
     const session = this.requireArchiveSession();
+    const entryId = existingEntryId || uuid();
     const preferences = {
       ...session.root.preferences,
       ...(overrideMode ? { optimizationMode: overrideMode } : {})
     };
     const analysis = await analyzePath(absolutePath, preferences, this.state.capabilities, tempDir, {
-      manualClassification
+      manualRoute
     });
     const stats = await fs.stat(absolutePath);
     const revisionId = uuid();
 
     const originalArtifact = await session.objectStore.storeFile(
       analysis.original.path,
-      session.root.preferences.compressionBehavior
+      session.root.preferences.compressionBehavior,
+      {
+        extension: analysis.original.extension,
+        mime: analysis.original.mime
+      }
     );
 
     let derivativeArtifact = null;
     if (analysis.derivative?.path) {
       derivativeArtifact = await session.objectStore.storeFile(
         analysis.derivative.path,
-        session.root.preferences.compressionBehavior
+        session.root.preferences.compressionBehavior,
+        {
+          extension: analysis.derivative.extension,
+          mime: analysis.derivative.mime
+        }
       );
     }
 
@@ -876,6 +940,7 @@ class ArchiveService {
         codec: analysis.original.codec || null
       },
       overrideMode: overrideMode || null,
+      routing: analysis.routing ?? null,
       summary: analysis.summary,
       actions: [
         overrideMode ? `per-file override ${overrideMode}` : "used archive defaults",
@@ -911,11 +976,11 @@ class ArchiveService {
       existingEntry.fileKind = analysis.kind;
       existingEntry.revisions.unshift(nextRevision);
       await this.saveEntry(existingEntry);
+      await this.cacheRevisionPreviews(existingEntry.id, revisionId, analysis.kind, analysis.previewSourcePath || analysis.original.path);
       this.pushLog(`reprocessed ${relativePath} with override ${overrideMode}`);
       return existingEntry.id;
     }
 
-    const entryId = uuid();
     const entry = {
       id: entryId,
       name: path.basename(absolutePath),
@@ -931,6 +996,7 @@ class ArchiveService {
     session.root.stats.entryCount += 1;
     session.root.stats.logicalBytes += stats.size;
     await this.saveEntry(entry);
+    await this.cacheRevisionPreviews(entryId, revisionId, analysis.kind, analysis.previewSourcePath || analysis.original.path);
     this.pushLog(`ingested ${relativePath} (${analysis.kind})`);
     return entryId;
   }
@@ -1041,24 +1107,23 @@ class ArchiveService {
       }
 
       const descriptor = await withTempDir("stow-preview-source-", async (tempDir) => {
+        const previewArtifact =
+          entry.fileKind === "video" && revision.optimizedArtifact ? revision.optimizedArtifact : revision.originalArtifact;
         const sourcePath = await session.objectStore.materializeObjectToTempPath(
-          revision.originalArtifact,
-          revision.originalArtifact.extension || path.extname(entry.name),
+          previewArtifact,
+          previewArtifact.extension || path.extname(entry.name),
           "stow-preview-materialized-"
         );
         try {
-          const outputDir = path.join(tempDir, "preview");
+          const outputDir = this.previewCache.previewDir(key);
+          await ensureDir(outputDir);
           const preview = await generatePreviewFile(sourcePath, entry.fileKind, previewKind, outputDir);
           if (!preview) {
             return null;
           }
 
-          const finalDir = path.join(this.previewCache.previewDir(key));
-          await ensureDir(finalDir);
-          const finalPath = path.join(finalDir, path.basename(preview.path));
-          await fs.copyFile(preview.path, finalPath);
           return this.previewCache.writeDescriptor(key, {
-            path: finalPath,
+            path: preview.path,
             mime: preview.mime,
             revisionId: revision.id,
             kind: previewKind
@@ -1074,7 +1139,7 @@ class ArchiveService {
     }
   }
 
-  async reprocessEntry(entryId, overrideMode) {
+  async reprocessEntry(entryId, overrideMode, routeOverride = null) {
     this.requireArchiveSession();
     this.beginSessionOperation();
     try {
@@ -1087,6 +1152,18 @@ class ArchiveService {
       if (!sourcePath || !(await exists(sourcePath))) {
         throw new Error("Original source path is not available for reprocessing");
       }
+      if (routeOverride) {
+        await this.recordManualRouteFeedback(
+          [
+            {
+              absolutePath: sourcePath,
+              relativePath: entry.relativePath,
+              size: entry.size
+            }
+          ],
+          { [sourcePath]: routeOverride }
+        );
+      }
 
       await withTempDir("stow-reprocess-", async (tempDir) => {
         await this.ingestSource({
@@ -1094,7 +1171,8 @@ class ArchiveService {
           relativePath: entry.relativePath,
           tempDir,
           existingEntryId: entry.id,
-          overrideMode
+          overrideMode,
+          manualRoute: routeOverride
         });
       });
       await this.persistRoot();

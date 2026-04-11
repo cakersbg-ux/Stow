@@ -10,19 +10,22 @@ import type {
   ArchiveStats,
   DetectedArchive,
   InstallStatus,
-  ManualClassificationCategory,
-  ManualClassificationItem,
+  ManualRoutingItem,
   PreviewDescriptor,
   RecentArchive,
-  Settings
+  Settings,
+  UpscaleRoute
 } from "./types";
+import { getUpscaleRouteDescription, getUpscaleRouteLabel, UPSCALE_ROUTES } from "./upscaleRoutes";
 
 const defaultSettings: Settings = {
   imageTargetResolution: "1440p",
   videoTargetResolution: "1080p",
   compressionBehavior: "balanced",
   optimizationMode: "visually_lossless",
-  upscaleEnabled: true,
+  upscaleEnabled: false,
+  videoUpscaleEnabled: false,
+  videoInterpolationFrameTarget: "off",
   stripDerivativeMetadata: true,
   deleteOriginalFilesAfterSuccessfulUpload: true,
   argonProfile: "balanced",
@@ -51,18 +54,19 @@ const defaultShellState: AppShellState = {
 };
 
 const settingHints = {
-  imageTargetResolution: "Target tier used when optimizing images.",
-  videoTargetResolution: "Target tier used when optimizing video.",
-  compressionBehavior: "Controls compression strength for stored chunks.",
-  optimizationMode: "Choose between lossless preservation and visually lossless derivatives.",
-  argonProfile: "Controls password derivation cost.",
-  preferredArchiveRoot: "Default folder used when creating new archives.",
-  sessionIdleMinutes: "Idle timeout in minutes. Use 0 to disable automatic locking.",
-  sessionLockOnHide: "Immediately lock the archive when the app is backgrounded.",
-  upscaleEnabled:
-    "Automatically upscale media below the selected target tier, classify the content with the distilled router model, retry uncertain cases with a CLIP fallback, and route the file through the least-destructive AI upscaler available.",
-  stripDerivativeMetadata: "Remove non-essential metadata from generated derivatives.",
-  deleteOriginalFilesAfterSuccessfulUpload: "Remove the uploaded source files from disk after a successful ingest."
+  imageTargetResolution: "Target size for still-image derivatives.",
+  videoTargetResolution: "Target size for video derivatives.",
+  compressionBehavior: "How aggressively to compress stored chunks.",
+  optimizationMode: "Choose between lossless and visually lossless derivatives.",
+  argonProfile: "Password derivation cost.",
+  preferredArchiveRoot: "Default folder for new archives.",
+  sessionIdleMinutes: "Idle minutes before automatic locking. Use 0 to disable.",
+  sessionLockOnHide: "Lock the archive when the app is hidden.",
+  upscaleEnabled: "Upscale still images below the selected target tier using automatic routing.",
+  videoUpscaleEnabled: "Upscale videos before AV1 encoding. This is the most CPU-, GPU-, and temp-disk-intensive path.",
+  videoInterpolationFrameTarget: "Generate intermediate frames up to this FPS target.",
+  stripDerivativeMetadata: "Remove non-essential metadata from derivatives.",
+  deleteOriginalFilesAfterSuccessfulUpload: "Delete source files after a successful ingest."
 } as const;
 
 const versionLabel = `Stow v${packageJson.version}`;
@@ -76,9 +80,9 @@ type ArchiveBrowserItem = Omit<DetectedArchive, "sizeBytes"> & {
   sizeBytes: number | null;
 };
 
-type ManualClassificationDialogState = {
-  items: ManualClassificationItem[];
-  selections: Record<string, ManualClassificationCategory>;
+type ManualRoutingDialogState = {
+  items: ManualRoutingItem[];
+  selections: Record<string, UpscaleRoute>;
 };
 
 function formatBytes(bytes: number) {
@@ -117,21 +121,11 @@ function formatArchiveSize(bytes: number | null) {
   return formatBytes(bytes);
 }
 
-function getManualClassificationLabel(category: ManualClassificationCategory) {
-  switch (category) {
-    case "portrait":
-      return "Real person";
-    case "landscape":
-      return "Landscape";
-    case "photo":
-      return "General photo";
-    case "illustration":
-      return "Illustration";
-    case "anime":
-      return "Anime";
-    case "ui_screenshot":
-      return "UI or screenshot";
+function formatRoutingConfidence(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "n/a";
   }
+  return `${Math.round(value * 100)}%`;
 }
 
 function getArchiveSortLabel(sortMode: ArchiveSortMode) {
@@ -359,7 +353,28 @@ function SettingsForm(props: {
           onChange={(event) => set("sessionIdleMinutes", Math.max(0, Number(event.target.value || 0)))}
         />
       </SettingField>
-      <ToggleField label="Upscale enabled" hint={settingHints.upscaleEnabled} checked={value.upscaleEnabled} disabled={disabled} onChange={(checked) => set("upscaleEnabled", checked)} />
+      <ToggleField label="Image upscaling" hint={settingHints.upscaleEnabled} checked={value.upscaleEnabled} disabled={disabled} onChange={(checked) => set("upscaleEnabled", checked)} />
+      <ToggleField
+        label="Video upscaling"
+        hint={settingHints.videoUpscaleEnabled}
+        checked={value.videoUpscaleEnabled}
+        disabled={disabled}
+        onChange={(checked) => set("videoUpscaleEnabled", checked)}
+      />
+      {value.videoUpscaleEnabled ? (
+        <SettingField label="Interpolation frame target" hint={settingHints.videoInterpolationFrameTarget}>
+          <select
+            disabled={disabled}
+            value={value.videoInterpolationFrameTarget}
+            onChange={(event) => set("videoInterpolationFrameTarget", event.target.value as Settings["videoInterpolationFrameTarget"])}
+          >
+            <option value="off">Keep original</option>
+            <option value="30">30 fps</option>
+            <option value="60">60 fps</option>
+            <option value="120">120 fps</option>
+          </select>
+        </SettingField>
+      ) : null}
       <ToggleField
         label="Strip derivative metadata"
         hint={settingHints.stripDerivativeMetadata}
@@ -936,9 +951,9 @@ function EntryDeleteConfirmationDialog(props: {
   );
 }
 
-function ManualClassificationDialog(props: {
-  dialog: ManualClassificationDialogState | null;
-  onChange: (absolutePath: string, category: ManualClassificationCategory) => void;
+function ManualRoutingDialog(props: {
+  dialog: ManualRoutingDialogState | null;
+  onChange: (absolutePath: string, route: UpscaleRoute) => void;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -947,48 +962,49 @@ function ManualClassificationDialog(props: {
   }
 
   return createPortal(
-    <div className="manual-classification-layer" role="presentation">
-      <div className="manual-classification-dialog" role="dialog" aria-modal="true" aria-labelledby="manual-classification-title">
-        <div className="manual-classification-header">
+    <div className="manual-routing-layer" role="presentation">
+      <div className="manual-routing-dialog" role="dialog" aria-modal="true" aria-labelledby="manual-routing-title">
+        <div className="manual-routing-header">
           <div>
-            <div className="manual-classification-kicker">Manual Classification Required</div>
-            <h2 id="manual-classification-title">Automatic upscale routing needs a human label.</h2>
+            <div className="manual-routing-kicker">Manual Route Required</div>
+            <h2 id="manual-routing-title">Automatic upscale routing needs a human override.</h2>
           </div>
           <button type="button" onClick={props.onCancel}>
             Cancel upload
           </button>
         </div>
-        <div className="manual-classification-body">
+        <div className="manual-routing-body">
           <p className="muted">
-            The distilled classifier could not make a reliable choice for the files below. Pick the closest content type for each item so Stow can choose the least-destructive upscaler instead of guessing.
+            Stout could not produce a trustworthy route for the files below. Pick the safest upscale path for each item so Stow does not guess blindly.
           </p>
-          <div className="manual-classification-list">
+          <div className="manual-routing-list">
             {props.dialog.items.map((item) => (
-              <div key={item.absolutePath} className="manual-classification-card">
-                <div className="manual-classification-card-header">
+              <div key={item.absolutePath} className="manual-routing-card">
+                <div className="manual-routing-card-header">
                   <strong>{item.relativePath}</strong>
-                  <span className="manual-classification-type">{item.mediaType}</span>
+                  <span className="manual-routing-type">{item.mediaType}</span>
                 </div>
                 <span className="muted">{item.reason}</span>
                 <label className="setting-field">
-                  <span>Choose content type</span>
+                  <span>Choose upscale route</span>
                   <select
                     value={props.dialog.selections[item.absolutePath]}
-                    onChange={(event) => props.onChange(item.absolutePath, event.target.value as ManualClassificationCategory)}
+                    onChange={(event) => props.onChange(item.absolutePath, event.target.value as UpscaleRoute)}
                   >
                     {item.choices.map((choice) => (
                       <option key={choice} value={choice}>
-                        {getManualClassificationLabel(choice)}
+                        {getUpscaleRouteLabel(choice)}
                       </option>
                     ))}
                   </select>
+                  <span className="muted">{getUpscaleRouteDescription(props.dialog.selections[item.absolutePath])}</span>
                 </label>
               </div>
             ))}
           </div>
         </div>
-        <div className="manual-classification-footer">
-          <span className="muted">{props.dialog.items.length} file{props.dialog.items.length === 1 ? "" : "s"} waiting for classification</span>
+        <div className="manual-routing-footer">
+          <span className="muted">{props.dialog.items.length} file{props.dialog.items.length === 1 ? "" : "s"} waiting for routing</span>
           <div className="actions">
             <button type="button" onClick={props.onCancel}>
               Cancel upload
@@ -1036,6 +1052,8 @@ function App() {
   const [preview, setPreview] = useState<PreviewDescriptor | null>(null);
   const [progress, setProgress] = useState<ArchiveProgress | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
   const [archivePanel, setArchivePanel] = useState<"open" | "create">("open");
   const [status, setStatus] = useState("Ready");
   const [archiveName, setArchiveName] = useState("Archive");
@@ -1046,6 +1064,7 @@ function App() {
   const [openPassword, setOpenPassword] = useState("");
   const [unlockPassword, setUnlockPassword] = useState("");
   const [overrideMode, setOverrideMode] = useState<"lossless" | "visually_lossless">("visually_lossless");
+  const [routeOverride, setRouteOverride] = useState<UpscaleRoute | "auto">("auto");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [archiveBrowserOpen, setArchiveBrowserOpen] = useState(false);
   const [archiveBrowserLoading, setArchiveBrowserLoading] = useState(false);
@@ -1058,12 +1077,12 @@ function App() {
   const [loadedOffsets, setLoadedOffsets] = useState<Set<number>>(new Set());
   const [renamingEntryId, setRenamingEntryId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [manualClassificationDialog, setManualClassificationDialog] = useState<ManualClassificationDialogState | null>(null);
+  const [manualRoutingDialog, setManualRoutingDialog] = useState<ManualRoutingDialogState | null>(null);
   const uploadQueueRef = useRef<string[][]>([]);
   const uploadQueueRunningRef = useRef(false);
   const wasInstallActiveRef = useRef(shellState.installStatus.active);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
-  const manualClassificationResolverRef = useRef<((value: Record<string, ManualClassificationCategory> | null) => void) | null>(null);
+  const manualRoutingResolverRef = useRef<((value: Record<string, UpscaleRoute> | null) => void) | null>(null);
 
   const archiveUnlocked = Boolean(shellState.archive?.unlocked && shellState.archive.summary);
   const selectedArchiveIsUnlocked = Boolean(shellState.archive?.unlocked && shellState.archive?.path === openArchivePath);
@@ -1098,23 +1117,23 @@ function App() {
     }
   }
 
-  function closeManualClassificationDialog(nextSelections: Record<string, ManualClassificationCategory> | null) {
-    const resolver = manualClassificationResolverRef.current;
-    manualClassificationResolverRef.current = null;
-    setManualClassificationDialog(null);
+  function closeManualRoutingDialog(nextSelections: Record<string, UpscaleRoute> | null) {
+    const resolver = manualRoutingResolverRef.current;
+    manualRoutingResolverRef.current = null;
+    setManualRoutingDialog(null);
     if (resolver) {
       resolver(nextSelections);
     }
   }
 
-  function requestManualClassification(items: ManualClassificationItem[]) {
-    setStatus("Waiting for manual classification");
-    return new Promise<Record<string, ManualClassificationCategory> | null>((resolve) => {
+  function requestManualRouting(items: ManualRoutingItem[]) {
+    setStatus("Waiting for manual routing");
+    return new Promise<Record<string, UpscaleRoute> | null>((resolve) => {
       const selections = Object.fromEntries(
-        items.map((item) => [item.absolutePath, item.suggestedCategory ?? (item.choices.includes("photo") ? "photo" : item.choices[0])])
-      ) as Record<string, ManualClassificationCategory>;
-      manualClassificationResolverRef.current = resolve;
-      setManualClassificationDialog({
+        items.map((item) => [item.absolutePath, item.suggestedRoute ?? item.choices[0] ?? UPSCALE_ROUTES[0]])
+      ) as Record<string, UpscaleRoute>;
+      manualRoutingResolverRef.current = resolve;
+      setManualRoutingDialog({
         items,
         selections
       });
@@ -1368,6 +1387,11 @@ function App() {
   }, [selectedEntry?.id, selectedEntry?.latestRevisionId]);
 
   useEffect(() => {
+    const revision = selectedEntry?.revisions.find((candidate) => candidate.id === selectedEntry.latestRevisionId) ?? selectedEntry?.revisions[0] ?? null;
+    setRouteOverride(revision?.routing?.route ?? "auto");
+  }, [selectedEntry?.id, selectedEntry?.latestRevisionId]);
+
+  useEffect(() => {
     if (!selectedEntry || renamingEntryId !== selectedEntry.id || !renameInputRef.current) {
       return;
     }
@@ -1381,7 +1405,7 @@ function App() {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [renameDraft, renamingEntryId, selectedEntry]);
+  }, [renamingEntryId, selectedEntry]);
 
   useEffect(() => {
     if (!selectedArchiveBrowserPath && shellState.recentArchives[0]) {
@@ -1447,6 +1471,68 @@ function App() {
     };
   }, [shellState.archive?.session?.effectivePolicy.lockOnHide, uiLocked]);
 
+  useEffect(() => {
+    function handleDragEnter(event: DragEvent) {
+      event.preventDefault();
+      dragCounterRef.current += 1;
+      if (dragCounterRef.current === 1) {
+        setIsDragOver(true);
+      }
+    }
+
+    function handleDragLeave(event: DragEvent) {
+      event.preventDefault();
+      dragCounterRef.current -= 1;
+      if (dragCounterRef.current <= 0) {
+        dragCounterRef.current = 0;
+        setIsDragOver(false);
+      }
+    }
+
+    function handleDragOver(event: DragEvent) {
+      event.preventDefault();
+    }
+
+    function handleDrop(event: DragEvent) {
+      event.preventDefault();
+      dragCounterRef.current = 0;
+      setIsDragOver(false);
+
+      if (!archiveUnlocked || uiLocked) {
+        return;
+      }
+
+      const files = event.dataTransfer?.files;
+      if (!files || files.length === 0) {
+        return;
+      }
+
+      const paths: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if ((file as unknown as { path?: string }).path) {
+          paths.push((file as unknown as { path: string }).path);
+        }
+      }
+
+      if (paths.length > 0) {
+        queueUpload(paths);
+      }
+    }
+
+    window.addEventListener("dragenter", handleDragEnter);
+    window.addEventListener("dragleave", handleDragLeave);
+    window.addEventListener("dragover", handleDragOver);
+    window.addEventListener("drop", handleDrop);
+
+    return () => {
+      window.removeEventListener("dragenter", handleDragEnter);
+      window.removeEventListener("dragleave", handleDragLeave);
+      window.removeEventListener("dragover", handleDragOver);
+      window.removeEventListener("drop", handleDrop);
+    };
+  }, [archiveUnlocked, uiLocked]);
+
   async function drainUploadQueue() {
     if (uploadQueueRunningRef.current || uiLocked || !uploadQueueRef.current.length) {
       return;
@@ -1460,23 +1546,23 @@ function App() {
         if (!batch) {
           break;
         }
-        let manualClassifications: Record<string, ManualClassificationCategory> = {};
+        let manualRoutes: Record<string, UpscaleRoute> = {};
 
         while (true) {
           setStatus("Uploading files");
-          const next = await window.stow.addPaths(batch, manualClassifications);
+          const next = await window.stow.addPaths(batch, manualRoutes);
           applyShellState(next.shellState);
-          if (!next.manualClassificationRequest?.items.length) {
+          if (!next.manualRoutingRequest?.items.length) {
             break;
           }
 
-          const selection = await requestManualClassification(next.manualClassificationRequest.items);
+          const selection = await requestManualRouting(next.manualRoutingRequest.items);
           if (!selection) {
             setStatus("Upload cancelled");
             break;
           }
-          manualClassifications = {
-            ...manualClassifications,
+          manualRoutes = {
+            ...manualRoutes,
             ...selection
           };
         }
@@ -1576,11 +1662,19 @@ function App() {
 
   return (
     <div className="app-shell">
+      {isDragOver && archiveUnlocked ? (
+        <div className="drop-zone-overlay">
+          <div className="drop-zone-inner">
+            <strong>Drop files to add</strong>
+            <span>Release to start ingesting into this archive</span>
+          </div>
+        </div>
+      ) : null}
       {shellState.installStatus.active ? <InstallOverlay installStatus={shellState.installStatus} /> : null}
       <header className="topbar">
         <div>
           <strong>{versionLabel}</strong>
-          <div className="status">{status === "Ready" ? "Local-first archive utility" : status}</div>
+          <div className="status" role="status" aria-live="polite">{status === "Ready" ? "Local-first archive utility" : status}</div>
         </div>
         <div className="topbar-actions">
           <button type="button" disabled={uiLocked} onClick={() => setSettingsOpen(true)}>
@@ -1695,11 +1789,6 @@ function App() {
             <button type="button" disabled={uiLocked} onClick={openArchiveBrowser}>
               View all archives
             </button>
-          </section>
-
-          <section className="panel">
-            <h2>Capabilities</h2>
-            <CapabilityList capabilities={shellState.capabilities} />
           </section>
         </aside>
 
@@ -1817,6 +1906,16 @@ function App() {
                       <span>Updated: {formatDateTime(detailRevision.addedAt)}</span>
                       <span>Mode: {detailRevision.overrideMode ?? "archive default"}</span>
                     </div>
+                    <div className="detail-row">
+                      <span>Route: {detailRevision.routing ? getUpscaleRouteLabel(detailRevision.routing.route) : "not used"}</span>
+                      <span>Confidence: {detailRevision.routing ? formatRoutingConfidence(detailRevision.routing.confidence) : "n/a"}</span>
+                    </div>
+                    {detailRevision.routing?.alternatives[0] ? (
+                      <div className="detail-row">
+                        <span>Fallback idea: {getUpscaleRouteLabel(detailRevision.routing.alternatives[0].route)}</span>
+                        <span>{formatRoutingConfidence(detailRevision.routing.alternatives[0].score)}</span>
+                      </div>
+                    ) : null}
                     <div className="actions">
                       <button type="button" disabled={uiLocked} onClick={() => void runTask("Opening in native view", () => window.stow.openEntryExternally(selectedEntry.id))}>
                         Open
@@ -1840,7 +1939,25 @@ function App() {
                         <option value="visually_lossless">visually lossless</option>
                         <option value="lossless">lossless</option>
                       </select>
-                      <button type="button" disabled={uiLocked} onClick={() => void runTask("Reprocessing entry", () => window.stow.reprocessEntry(selectedEntry.id, overrideMode))}>
+                      {selectedEntry.fileKind === "image" || selectedEntry.fileKind === "video" ? (
+                        <select disabled={uiLocked} value={routeOverride} onChange={(event) => setRouteOverride(event.target.value as UpscaleRoute | "auto")}>
+                          <option value="auto">auto route</option>
+                          {UPSCALE_ROUTES.map((route) => (
+                            <option key={route} value={route}>
+                              {getUpscaleRouteLabel(route)}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+                      <button
+                        type="button"
+                        disabled={uiLocked}
+                        onClick={() =>
+                          void runTask("Reprocessing entry", () =>
+                            window.stow.reprocessEntry(selectedEntry.id, overrideMode, routeOverride === "auto" ? null : routeOverride)
+                          )
+                        }
+                      >
                         Reprocess
                       </button>
                       <button type="button" className="delete-confirm-danger" disabled={uiLocked} onClick={() => requestDeleteEntry(selectedEntry)}>
@@ -1907,23 +2024,23 @@ function App() {
         onConfirm={() => void confirmDeleteEntry()}
       />
 
-      <ManualClassificationDialog
-        dialog={manualClassificationDialog}
-        onChange={(absolutePath, category) =>
-          setManualClassificationDialog((current) =>
+      <ManualRoutingDialog
+        dialog={manualRoutingDialog}
+        onChange={(absolutePath, route) =>
+          setManualRoutingDialog((current) =>
             current
               ? {
                   ...current,
                   selections: {
                     ...current.selections,
-                    [absolutePath]: category
+                    [absolutePath]: route
                   }
                 }
               : current
           )
         }
-        onCancel={() => closeManualClassificationDialog(null)}
-        onConfirm={() => closeManualClassificationDialog(manualClassificationDialog?.selections ?? null)}
+        onCancel={() => closeManualRoutingDialog(null)}
+        onConfirm={() => closeManualRoutingDialog(manualRoutingDialog?.selections ?? null)}
       />
 
       {settingsOpen ? (
@@ -1937,6 +2054,11 @@ function App() {
             </div>
             <div className="settings-dialog-body">
               <SettingsForm value={draftSettings} disabled={uiLocked} onChange={setDraftSettings} />
+              <div className="settings-divider" />
+              <section className="settings-info-section">
+                <h3 className="settings-info-title">Installed Tooling</h3>
+                <CapabilityList capabilities={shellState.capabilities} />
+              </section>
             </div>
             <div className="settings-dialog-footer">
               <button type="button" disabled={uiLocked} onClick={() => void runTask("Restoring defaults", () => window.stow.resetSettings())}>

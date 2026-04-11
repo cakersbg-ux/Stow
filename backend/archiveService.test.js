@@ -191,7 +191,7 @@ test("archive service preserves uploaded originals when deletion is disabled", a
   }
 });
 
-test("archive service requests manual classification instead of falling back when upscale routing is unavailable", async () => {
+test("archive service requests manual routing instead of falling back when upscale routing is unavailable", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-service-test-manual-classify-"));
   const bundledModelPath = path.join(__dirname, "generated", "model_quantized.onnx");
   const bundledModelBackupPath = `${bundledModelPath}.test-backup`;
@@ -247,8 +247,8 @@ test("archive service requests manual classification instead of falling back whe
       .toFile(sourcePath);
 
     const result = await service.addPaths([sourcePath]);
-    assert.equal(result.manualClassificationRequest?.items.length, 1);
-    assert.equal(result.manualClassificationRequest?.items[0].absolutePath, sourcePath);
+    assert.equal(result.manualRoutingRequest?.items.length, 1);
+    assert.equal(result.manualRoutingRequest?.items[0].absolutePath, sourcePath);
 
     const listing = await service.listEntries({ offset: 0, limit: 10 });
     assert.equal(listing.total, 0);
@@ -260,6 +260,58 @@ test("archive service requests manual classification instead of falling back whe
     if (bundledModelBackupExists) {
       await fs.rename(bundledModelBackupPath, bundledModelPath);
     }
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("archive service precomputes image previews during ingest", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-service-test-previews-"));
+  try {
+    const state = await createInitialState(path.join(tempDir, "user-data"), tempDir);
+    state.settings.deleteOriginalFilesAfterSuccessfulUpload = false;
+    state.installStatus = {
+      active: false,
+      phase: "complete",
+      message: "ready",
+      currentTarget: null,
+      completedSteps: 1,
+      totalSteps: 1,
+      installed: [],
+      skipped: []
+    };
+
+    const service = new ArchiveService(state, createEmitters());
+    await service.initialize();
+
+    await service.createArchive({
+      parentPath: tempDir,
+      name: "demo",
+      password: "password",
+      preferences: state.settings
+    });
+
+    const sourcePath = path.join(tempDir, "preview-source.png");
+    await sharp({
+      create: {
+        width: 640,
+        height: 360,
+        channels: 3,
+        background: { r: 48, g: 92, b: 160 }
+      }
+    })
+      .png()
+      .toFile(sourcePath);
+
+    await service.addPaths([sourcePath]);
+
+    const listing = await service.listEntries({ offset: 0, limit: 10 });
+    const detail = await service.getEntryDetail(listing.items[0].id);
+    const revisionId = detail.revisions[0].id;
+    const previewRoot = path.join(state.previewCachePath, state.archiveSession.root.archiveId, detail.id, revisionId);
+
+    await fs.access(path.join(previewRoot, "thumbnail.json"));
+    await fs.access(path.join(previewRoot, "preview.json"));
+  } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 });

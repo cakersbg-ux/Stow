@@ -1,107 +1,191 @@
 [
   {
     "id": "portrait_woman",
-    "label": "portrait",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/portrait-of-woman.jpg"
+    "route": "photo_gentle",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/portrait-of-woman.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "portrait_afro",
-    "label": "portrait",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/woman-with-afro.jpg"
+    "route": "photo_gentle",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/woman-with-afro.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "portrait_man_car",
-    "label": "portrait",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/young-man-standing-and-leaning-on-car.jpg"
+    "route": "photo_gentle",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/young-man-standing-and-leaning-on-car.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "landscape_airport",
-    "label": "landscape",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/airport.jpg"
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/airport.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "landscape_city",
-    "label": "landscape",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/city-streets.jpg"
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/city-streets.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "landscape_lake",
-    "label": "landscape",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/moraine-lake.png"
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/moraine-lake.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "photo_football",
-    "label": "photo",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/football-match.jpg"
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/football-match.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "photo_cats",
-    "label": "photo",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/cats.jpg"
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/cats.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "photo_corgi",
-    "label": "photo",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/corgi.jpg"
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/corgi.jpg",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "illustration_ad",
-    "label": "illustration",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/coca_cola_advertisement.png"
+    "route": "art_clean",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/coca_cola_advertisement.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "anime_pikachu",
-    "label": "anime",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/pikachu.png"
+    "route": "art_anime",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/pikachu.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "ui_invoice",
-    "label": "ui_screenshot",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/invoice.png"
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/invoice.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "ui_receipt",
-    "label": "ui_screenshot",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/receipt.png"
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/receipt.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "ui_schedule",
-    "label": "ui_screenshot",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/schedule.png"
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/schedule.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "portrait_astronaut",
-    "label": "portrait",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/astronaut.png"
+    "route": "photo_gentle",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/astronaut.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "landscape_beach",
-    "label": "landscape",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/beach.png"
+    "route": "photo_general",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/beach.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "photo_market_crowd",
-    "label": "photo",
-    "url": "https://upload.wikimedia.org/wikipedia/commons/9/96/Long_shot_of_crowd_in_early_market_morning.jpg"
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/9/96/Long_shot_of_crowd_in_early_market_morning.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
   },
   {
     "id": "photo_concert_crowd",
-    "label": "photo",
-    "url": "https://upload.wikimedia.org/wikipedia/commons/b/bb/Concert_crowd_%28Unsplash%29.jpg"
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/b/bb/Concert_crowd_%28Unsplash%29.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
   },
   {
     "id": "photo_group_outdoor",
-    "label": "photo",
-    "url": "https://upload.wikimedia.org/wikipedia/commons/d/df/Group_photo_of_the_participants_at_WikiOutdoor_Training_2024.jpg"
+    "route": "photo_general",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/d/df/Group_photo_of_the_participants_at_WikiOutdoor_Training_2024.jpg",
+    "sourceId": "wikimedia_commons",
+    "license": "Wikimedia Commons source file license",
+    "attribution": "Wikimedia Commons contributors",
+    "notes": null
   },
   {
     "id": "illustration_star_icon",
-    "label": "illustration",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/star-icon.png"
+    "route": "art_clean",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/star-icon.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   },
   {
     "id": "ui_semantic_search",
-    "label": "ui_screenshot",
-    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/semantic-image-search.png"
+    "route": "text_ui",
+    "url": "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/semantic-image-search.png",
+    "sourceId": "xenova_transformers_docs",
+    "license": "Transformers.js docs sample asset",
+    "attribution": "Xenova transformers.js docs samples",
+    "notes": null
   }
 ]

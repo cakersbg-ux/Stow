@@ -14,16 +14,24 @@ async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
 
-function buildClassIndex(config) {
-  return new Map((config.classes || []).map((item) => [item.id, item]));
+function getConfiguredRoutes(config) {
+  return config.routes || config.classes || [];
+}
+
+function getSourceRoutes(source) {
+  return source.useForRoutes || source.useForClasses || [];
+}
+
+function buildRouteIndex(config) {
+  return new Map(getConfiguredRoutes(config).map((item) => [item.id, item]));
 }
 
 function buildManifest(config) {
-  const classIndex = buildClassIndex(config);
-  const classes = (config.classes || []).map((entry) => ({
+  const routeIndex = buildRouteIndex(config);
+  const routes = getConfiguredRoutes(config).map((entry) => ({
     ...entry,
     sources: (config.sources || [])
-      .filter((source) => (source.useForClasses || []).includes(entry.id))
+      .filter((source) => getSourceRoutes(source).includes(entry.id))
       .map((source) => ({
         id: source.id,
         status: source.status,
@@ -32,7 +40,7 @@ function buildManifest(config) {
       }))
   }));
 
-  const totals = classes.reduce(
+  const totals = routes.reduce(
     (accumulator, entry) => {
       accumulator.targetImages += entry.targetCount || 0;
       return accumulator;
@@ -47,14 +55,14 @@ function buildManifest(config) {
       status: source.status,
       license: source.license,
       url: source.url,
-      impactedClasses: (source.useForClasses || []).filter((classId) => classIndex.has(classId))
+      impactedRoutes: getSourceRoutes(source).filter((routeId) => routeIndex.has(routeId))
     }));
 
   return {
     generatedAt: new Date().toISOString(),
     version: config.version || 1,
     totals,
-    classes,
+    routes,
     reviewQueue
   };
 }
@@ -66,7 +74,7 @@ function renderSummary(manifest) {
   lines.push(`Target images: ${manifest.totals.targetImages}`);
   lines.push("");
 
-  for (const entry of manifest.classes) {
+  for (const entry of manifest.routes) {
     lines.push(`- ${entry.id}: ${entry.targetCount} images`);
     lines.push(`  Preferred upscalers: ${entry.preferredUpscalers.join(", ")}`);
     lines.push(`  Source pool: ${entry.sources.map((source) => `${source.id} [${source.status}]`).join(", ")}`);

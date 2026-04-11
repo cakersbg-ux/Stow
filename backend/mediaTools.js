@@ -7,8 +7,7 @@ const ffmpegStatic = require("ffmpeg-static");
 const ffprobeStatic = require("ffprobe-static");
 const { v4: uuid } = require("uuid");
 const { classifyImageWithDistilledModel } = require("./distilledClassifier");
-const { classifyImageWithClip } = require("./clipClassifier");
-const { extractVisualFeatures } = require("./visualFeatures");
+const { getUpscaleRouteLabel, normalizeUpscaleRoute, UPSCALE_ROUTES } = require("./upscaleRoutes");
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".avif", ".jxl"]);
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"]);
@@ -21,35 +20,8 @@ const WAIFU2X_COMMANDS = ["waifu2x-ncnn-vulkan"];
 const REAL_ESRGAN_SCALE_FACTORS = [2, 3, 4];
 const REAL_CUGAN_SCALE_FACTORS = [2, 3, 4];
 const WAIFU2X_SCALE_FACTORS = [2, 4, 8, 16, 32];
+const VIDEO_INTERPOLATION_FRAME_TARGETS = new Set(["off", "30", "60", "120"]);
 const VIDEO_FRAME_PATTERN = "frame-%08d.png";
-const ROUTER_CONFIDENCE_THRESHOLD = 0.45;
-const VISUAL_CLASSIFICATION_CATEGORIES = ["portrait", "landscape", "photo", "illustration", "anime", "ui_screenshot"];
-const ROUTER_THRESHOLDS = {
-  distilled: {
-    portrait: { confidence: 0.42, margin: 0.08 },
-    landscape: { confidence: 0.4, margin: 0.07 },
-    photo: { confidence: 0.4, margin: 0.06 },
-    illustration: { confidence: 0.52, margin: 0.09 },
-    anime: { confidence: 0.54, margin: 0.1 },
-    ui_screenshot: { confidence: 0.5, margin: 0.1 }
-  },
-  clip: {
-    portrait: { confidence: 0.36, margin: 0.03 },
-    landscape: { confidence: 0.34, margin: 0.03 },
-    photo: { confidence: 0.34, margin: 0.03 },
-    illustration: { confidence: 0.38, margin: 0.03 },
-    anime: { confidence: 0.4, margin: 0.04 },
-    ui_screenshot: { confidence: 0.42, margin: 0.05 }
-  },
-  consensus: {
-    portrait: { confidence: 0.38, margin: 0.04 },
-    landscape: { confidence: 0.36, margin: 0.04 },
-    photo: { confidence: 0.36, margin: 0.03 },
-    illustration: { confidence: 0.4, margin: 0.04 },
-    anime: { confidence: 0.42, margin: 0.05 },
-    ui_screenshot: { confidence: 0.42, margin: 0.05 }
-  }
-};
 
 const TIER_HEIGHTS = {
   "1080p": 1080,
@@ -178,12 +150,96 @@ function withMacosRealEsrganHint(message) {
   if (process.platform !== "darwin") {
     return message;
   }
-  return `${message}; macOS tip: verify the managed AI upscalers can start in Terminal and Vulkan/MoltenVK support is available`;
+  return `${message}; macOS tip: verify the managed AI upscaler runs from its install folder in Terminal and that Vulkan/MoltenVK support is available`;
 }
 
 function getVideoFrameRate(videoStream) {
   const candidate = videoStream?.avg_frame_rate && videoStream.avg_frame_rate !== "0/0" ? videoStream.avg_frame_rate : videoStream?.r_frame_rate;
   return candidate && candidate !== "0/0" ? candidate : "30/1";
+}
+
+function parseFrameRate(frameRate) {
+  if (typeof frameRate !== "string") {
+    return null;
+  }
+  const trimmed = frameRate.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.includes("/")) {
+    const [numeratorRaw, denominatorRaw] = trimmed.split("/");
+    const numerator = Number.parseFloat(numeratorRaw);
+    const denominator = Number.parseFloat(denominatorRaw);
+    if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) {
+      return null;
+    }
+    const value = numerator / denominator;
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+
+  const value = Number.parseFloat(trimmed);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function formatFps(value) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "unknown";
+  }
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function ensureEven(value) {
+  const rounded = Math.max(2, Math.round(Number(value) || 0));
+  return rounded % 2 === 0 ? rounded : rounded + 1;
+}
+
+function normalizeVideoDimensions(dimensions) {
+  return {
+    ...dimensions,
+    width: ensureEven(dimensions.width),
+    height: ensureEven(dimensions.height),
+    targetHeight: ensureEven(dimensions.targetHeight)
+  };
+}
+
+function normalizeVideoInterpolationFrameTarget(value) {
+  if (typeof value !== "string") {
+    return "off";
+  }
+  return VIDEO_INTERPOLATION_FRAME_TARGETS.has(value) ? value : "off";
+}
+
+function resolveInterpolationTargetFps(videoStream, interpolationFrameTarget) {
+  const normalizedTarget = normalizeVideoInterpolationFrameTarget(interpolationFrameTarget);
+  if (normalizedTarget === "off") {
+    return null;
+  }
+
+  const targetFps = Number.parseInt(normalizedTarget, 10);
+  if (!Number.isFinite(targetFps) || targetFps <= 0) {
+    return null;
+  }
+
+  const sourceFps = parseFrameRate(getVideoFrameRate(videoStream)) ?? 30;
+  return targetFps > sourceFps + 0.01 ? targetFps : null;
+}
+
+function buildVideoFilterChain(dimensions, interpolationTargetFps = null, applySpatialUpscale = true) {
+  const filters = [];
+
+  if (applySpatialUpscale) {
+    filters.push(`scale=${dimensions.width}:${dimensions.height}:flags=lanczos+accurate_rnd+full_chroma_int:force_original_aspect_ratio=decrease`);
+    filters.push(`pad=${dimensions.width}:${dimensions.height}:(ow-iw)/2:(oh-ih)/2:color=black`);
+  }
+
+  if (interpolationTargetFps) {
+    filters.push(`minterpolate=fps=${interpolationTargetFps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1`);
+  }
+
+  if (filters.length > 0) {
+    filters.push("format=yuv420p");
+  }
+  return filters;
 }
 
 function clamp01(value) {
@@ -193,19 +249,17 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
 
-class ManualClassificationRequiredError extends Error {
+class ManualRoutingRequiredError extends Error {
   constructor(details) {
     super(details.message);
-    this.name = "ManualClassificationRequiredError";
-    this.code = "MANUAL_CLASSIFICATION_REQUIRED";
+    this.name = "ManualRoutingRequiredError";
+    this.code = "MANUAL_ROUTING_REQUIRED";
     this.details = details;
   }
 }
 
-function buildManualScores(category) {
-  return Object.fromEntries(
-    VISUAL_CLASSIFICATION_CATEGORIES.map((label) => [label, label === category ? 1 : 0])
-  );
+function buildManualScores(route) {
+  return Object.fromEntries(UPSCALE_ROUTES.map((label) => [label, label === route ? 1 : 0]));
 }
 
 function rankScores(scores = {}) {
@@ -219,185 +273,74 @@ function getClassificationMargin(classification) {
   return top - runnerUp;
 }
 
-function getRoutingThreshold(provider, category) {
-  const family = ROUTER_THRESHOLDS[provider] || ROUTER_THRESHOLDS.distilled;
-  return family[category] || family.photo || { confidence: ROUTER_CONFIDENCE_THRESHOLD, margin: 0.05 };
-}
-
-function classificationPassesGate(classification, provider = classification?.provider || "distilled") {
-  if (!classification?.category) {
-    return false;
-  }
-  const threshold = getRoutingThreshold(provider, classification.category);
-  return classification.confidence >= threshold.confidence && getClassificationMargin(classification) >= threshold.margin;
-}
-
-function mergeScores(left = {}, right = {}) {
-  const labels = new Set([...Object.keys(left), ...Object.keys(right)]);
-  return Object.fromEntries(
-    [...labels].map((label) => [label, ((left[label] || 0) + (right[label] || 0)) / 2])
-  );
-}
-
-function buildConsensusClassification(distilled, clip) {
-  if (!distilled?.category || !clip?.category || distilled.category !== clip.category) {
-    return null;
-  }
-
-  const mergedScores = mergeScores(distilled.scores, clip.scores);
-  const merged = {
-    category: distilled.category,
-    confidence: Math.max(distilled.confidence, clip.confidence, (distilled.confidence + clip.confidence) / 2 + 0.08),
-    scores: mergedScores,
-    provider: "distilled+clip"
-  };
-
-  return classificationPassesGate(merged, "consensus") ? merged : null;
-}
-
 function summarizeClassification(providerLabel, classification) {
   if (!classification) {
     return `${providerLabel} unavailable`;
   }
-  return `${providerLabel} suggested ${classification.category} at ${formatConfidence(classification.confidence)}`;
+  return `${providerLabel} suggested ${getUpscaleRouteLabel(classification.route)} at ${formatConfidence(classification.confidence)}`;
 }
 
-function buildAutomaticFailureMessage(distilled, clip, clipAttempted) {
-  const summaryParts = [summarizeClassification("distilled", distilled)];
-  if (clipAttempted) {
-    summaryParts.push(summarizeClassification("CLIP fallback", clip));
-  } else {
-    summaryParts.push("CLIP fallback not needed");
-  }
-
-  if (!distilled && !clip) {
+function buildAutomaticFailureMessage(distilled) {
+  const summary = summarizeClassification("Stout", distilled);
+  if (!distilled) {
     return {
       failureCode: "model_unavailable",
-      message: `Automatic content routing failed because no classifier was available (${summaryParts.join("; ")}).`
-    };
-  }
-
-  if (distilled && clip && distilled.category !== clip.category) {
-    return {
-      failureCode: "low_confidence",
-      message: `Automatic content routing failed because the distilled router and CLIP fallback disagreed (${summaryParts.join("; ")}).`
+      message: `Automatic content routing failed because Stout was unavailable (${summary}).`
     };
   }
 
   return {
-    failureCode: "low_confidence",
-    message: `Automatic content routing failed because the classifiers were not confident enough (${summaryParts.join("; ")}).`
+    failureCode: "runtime_error",
+    message: `Automatic content routing failed because Stout could not produce a trustworthy route (${summary}).`
   };
 }
 
-async function shouldSecondGuessDistilledClassification(filePath, distilledClassification) {
-  if (!distilledClassification?.category) {
-    return true;
-  }
-
-  if (distilledClassification.category !== "portrait") {
-    return !classificationPassesGate(distilledClassification, "distilled");
-  }
-
-  try {
-    const features = await extractVisualFeatures(filePath);
-    const suspiciousWidePortrait =
-      features.aspectRatio >= 1.25 &&
-      features.skinRatio < 0.14 &&
-      (features.natureRatio >= 0.18 || features.flatRatio >= 0.36);
-    return suspiciousWidePortrait;
-  } catch (_error) {
-    return !classificationPassesGate(distilledClassification, "distilled");
-  }
-}
-
-function createManualClassification(category) {
-  if (!VISUAL_CLASSIFICATION_CATEGORIES.includes(category)) {
-    throw new Error(`Unsupported manual classification category: ${category}`);
+function createManualRouting(route) {
+  const normalizedRoute = normalizeUpscaleRoute(route);
+  if (!normalizedRoute) {
+    throw new Error(`Unsupported manual route: ${route}`);
   }
 
   return {
-    category,
+    route: normalizedRoute,
     confidence: 1,
     provider: "manual",
-    scores: buildManualScores(category)
+    accepted: true,
+    scores: buildManualScores(normalizedRoute),
+    alternatives: []
   };
 }
 
 async function attemptAutomaticClassification(filePath, capabilities = {}) {
-  let distilledClassification = null;
   try {
-    distilledClassification = await classifyImageWithDistilledModel(filePath, capabilities);
-  } catch (error) {
-    distilledClassification = {
-      category: null,
-      confidence: 0,
-      scores: {},
-      provider: "distilled-error",
-      error: normalizeErrorMessage(error)
-    };
-  }
-
-  const shouldEscalateToClip = await shouldSecondGuessDistilledClassification(filePath, distilledClassification);
-
-  if (distilledClassification?.category && classificationPassesGate(distilledClassification, "distilled") && !shouldEscalateToClip) {
-    return {
-      ok: true,
-      classification: distilledClassification
-    };
-  }
-
-  let clipClassification = null;
-  let clipAttempted = false;
-  if (!distilledClassification?.category || !classificationPassesGate(distilledClassification, "distilled") || shouldEscalateToClip) {
-    clipAttempted = true;
-    try {
-      clipClassification = await classifyImageWithClip(filePath);
-    } catch (_error) {
-      clipClassification = null;
+    const distilledClassification = await classifyImageWithDistilledModel(filePath, capabilities);
+    if (distilledClassification?.route && distilledClassification.accepted) {
+      return {
+        ok: true,
+        classification: distilledClassification
+      };
     }
-  }
 
-  const consensus = buildConsensusClassification(
-    distilledClassification?.category ? distilledClassification : null,
-    clipClassification?.category ? clipClassification : null
-  );
-  if (consensus) {
+    const failure = buildAutomaticFailureMessage(distilledClassification?.route ? distilledClassification : null);
     return {
-      ok: true,
-      classification: consensus
+      ok: false,
+      failureCode: failure.failureCode,
+      message: failure.message,
+      classification: distilledClassification?.route ? distilledClassification : null
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      failureCode: "runtime_error",
+      message: `Automatic content routing failed because Stout errored (${normalizeErrorMessage(error)}).`,
+      classification: null
     };
   }
-
-  if (clipClassification?.category && classificationPassesGate(clipClassification, "clip")) {
-    return {
-      ok: true,
-      classification: clipClassification
-    };
-  }
-
-  if (distilledClassification?.category && clipClassification?.category && distilledClassification.category === "photo" && clipClassification.category !== "photo" && classificationPassesGate(clipClassification, "clip")) {
-    return {
-      ok: true,
-      classification: clipClassification
-    };
-  }
-
-  const distilledForFailure = distilledClassification?.category ? distilledClassification : null;
-  const clipForFailure = clipClassification?.category ? clipClassification : null;
-  const failure = buildAutomaticFailureMessage(distilledForFailure, clipForFailure, clipAttempted);
-
-  return {
-    ok: false,
-    failureCode: failure.failureCode,
-    message: failure.message,
-    classification: consensus || clipForFailure || distilledForFailure || null
-  };
 }
 
-async function resolveClassificationOrThrow(filePath, capabilities, mediaType, manualCategory = null) {
-  if (manualCategory) {
-    return createManualClassification(manualCategory);
+async function resolveClassificationOrThrow(filePath, capabilities, mediaType, manualRoute = null) {
+  if (manualRoute) {
+    return createManualRouting(manualRoute);
   }
 
   const automatic = await attemptAutomaticClassification(filePath, capabilities);
@@ -405,13 +348,14 @@ async function resolveClassificationOrThrow(filePath, capabilities, mediaType, m
     return automatic.classification;
   }
 
-  throw new ManualClassificationRequiredError({
+  throw new ManualRoutingRequiredError({
     mediaType,
     failureCode: automatic.failureCode,
     message: automatic.message,
-    suggestedCategory: automatic.classification?.category ?? null,
+    suggestedRoute: automatic.classification?.route ?? null,
     confidence: automatic.classification?.confidence ?? null,
-    scores: automatic.classification?.scores ?? null
+    scores: automatic.classification?.scores ?? null,
+    alternatives: automatic.classification?.alternatives ?? []
   });
 }
 
@@ -421,10 +365,10 @@ function formatConfidence(value) {
 
 function formatClassifierSummary(classification, mediaType) {
   if (classification?.provider === "manual") {
-    return `manually classified ${mediaType} as ${classification.category}`;
+    return `manually routed ${mediaType} as ${getUpscaleRouteLabel(classification.route)}`;
   }
   const provider = classification?.provider ? ` via ${classification.provider.toUpperCase()}` : "";
-  return `auto-classified ${mediaType} as ${classification.category} (${formatConfidence(classification.confidence)})${provider}`;
+  return `auto-routed ${mediaType} as ${getUpscaleRouteLabel(classification.route)} (${formatConfidence(classification.confidence)})${provider}`;
 }
 
 function canGenerateImageDerivative(preferences, capabilities, extension, isAnimated) {
@@ -440,9 +384,9 @@ function canGenerateImageDerivative(preferences, capabilities, extension, isAnim
   return true;
 }
 
-function buildAutomaticUpscaleProfiles(category, mediaType) {
+function buildAutomaticUpscaleProfiles(route, mediaType) {
   if (mediaType === "video") {
-    if (category === "anime" || category === "illustration") {
+    if (route === "art_anime" || route === "art_clean") {
       return [
         {
           engine: "realEsrgan",
@@ -465,7 +409,7 @@ function buildAutomaticUpscaleProfiles(category, mediaType) {
     ];
   }
 
-  if (category === "anime") {
+  if (route === "art_anime") {
     return [
       {
         engine: "realCugan",
@@ -491,7 +435,7 @@ function buildAutomaticUpscaleProfiles(category, mediaType) {
     ];
   }
 
-  if (category === "illustration") {
+  if (route === "art_clean") {
     return [
       {
         engine: "waifu2x",
@@ -517,7 +461,26 @@ function buildAutomaticUpscaleProfiles(category, mediaType) {
     ];
   }
 
-  if (category === "portrait") {
+  if (route === "text_ui") {
+    return [
+      {
+        engine: "waifu2x",
+        supportedFactors: WAIFU2X_SCALE_FACTORS,
+        label: "waifu2x",
+        noiseLevel: 0,
+        modelDirectoryName: "models-cunet"
+      },
+      {
+        engine: "realEsrgan",
+        modelName: "realesrgan-x4plus",
+        supportedFactors: REAL_ESRGAN_SCALE_FACTORS,
+        label: "Real-ESRGAN x4plus",
+        modelDirectoryName: "models"
+      }
+    ];
+  }
+
+  if (route === "photo_gentle") {
     return [
       {
         engine: "realEsrgan",
@@ -600,9 +563,9 @@ function buildUpscalerArgs(profile, commandPath, inputPath, outputPath, scale) {
   throw new Error(`Unsupported upscaler engine: ${profile.engine}`);
 }
 
-async function spawnCapture(command, args) {
+async function spawnCapture(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args);
+    const child = spawn(command, args, options);
     const stdout = [];
     const stderr = [];
     child.stdout.on("data", (chunk) => stdout.push(chunk));
@@ -610,7 +573,15 @@ async function spawnCapture(command, args) {
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(Buffer.concat(stderr).toString() || `${command} failed`));
+        const stderrText = Buffer.concat(stderr).toString().trim();
+        const stdoutText = Buffer.concat(stdout).toString().trim();
+        reject(
+          new Error(
+            stderrText ||
+              stdoutText ||
+              `${command} exited with code ${code ?? "unknown"}`
+          )
+        );
         return;
       }
       resolve(Buffer.concat(stdout).toString("utf8"));
@@ -672,8 +643,31 @@ function isLosslessCodec(codecName) {
   return ["ffv1", "huffyuv", "utvideo", "rawvideo", "png", "ffvhuff"].includes((codecName || "").toLowerCase());
 }
 
+function buildJxlEncodeArgs(inputPath, outputPath, options = {}) {
+  const inputExtension = extname(inputPath);
+  const {
+    effort = 7,
+    visuallyLosslessDistance = 1.0,
+    mathematicallyLossless = false
+  } = options;
+
+  if (mathematicallyLossless) {
+    const baseArgs = [inputPath, outputPath, `--effort=${effort}`];
+    if (inputExtension === ".png" || inputExtension === ".jxl") {
+      return [...baseArgs, "--modular=1"];
+    }
+    return [...baseArgs, "--distance=0"];
+  }
+
+  return [inputPath, outputPath, `--effort=${effort}`, `--distance=${visuallyLosslessDistance}`];
+}
+
+function canUseDirectJxlInput(inputPath, stripDerivativeMetadata) {
+  return Boolean(inputPath) && !stripDerivativeMetadata;
+}
+
 async function runAutomaticUpscale(inputPath, outputPath, classification, mediaType, targetHeight, sourceWidth, sourceHeight, capabilities) {
-  const profiles = buildAutomaticUpscaleProfiles(classification.category, mediaType);
+  const profiles = buildAutomaticUpscaleProfiles(classification.route, mediaType);
   const failures = [];
 
   for (const profile of profiles) {
@@ -693,7 +687,9 @@ async function runAutomaticUpscale(inputPath, outputPath, classification, mediaT
     }
 
     try {
-      await spawnCapture(commandPath, buildUpscalerArgs(profile, commandPath, inputPath, outputPath, scale));
+      await spawnCapture(commandPath, buildUpscalerArgs(profile, commandPath, inputPath, outputPath, scale), {
+        cwd: path.dirname(commandPath)
+      });
       return {
         ok: true,
         profile,
@@ -727,7 +723,7 @@ async function extractVideoClassificationFrame(filePath, workDir) {
   return framePath;
 }
 
-async function upscaleImageSource(filePath, metadata, dimensions, capabilities, workDir, manualCategory = null) {
+async function upscaleImageSource(filePath, metadata, dimensions, capabilities, workDir, manualRoute = null) {
   if (!shouldUpscaleToTarget(metadata.width, metadata.height, dimensions.targetHeight)) {
     return {
       path: filePath,
@@ -735,7 +731,7 @@ async function upscaleImageSource(filePath, metadata, dimensions, capabilities, 
     };
   }
 
-  const classification = await resolveClassificationOrThrow(filePath, capabilities, "image", manualCategory);
+  const classification = await resolveClassificationOrThrow(filePath, capabilities, "image", manualRoute);
   const aiOutputPath = path.join(workDir, `${uuid()}-realesrgan.png`);
   const finalOutputPath = path.join(workDir, `${uuid()}-realesrgan-target.png`);
 
@@ -754,6 +750,7 @@ async function upscaleImageSource(filePath, metadata, dimensions, capabilities, 
     if (!result.ok) {
       return {
         path: filePath,
+        routing: classification,
         actions: [
           formatClassifierSummary(classification, "image"),
           withMacosRealEsrganHint(`skipped image upscaling because ${result.reason}`)
@@ -773,6 +770,7 @@ async function upscaleImageSource(filePath, metadata, dimensions, capabilities, 
 
     return {
       path: finalOutputPath,
+      routing: classification,
       actions: [
         formatClassifierSummary(classification, "image"),
         `upscaled via ${result.profile.label} ${result.scale}x and fit to ${dimensions.width}x${dimensions.height}`
@@ -781,6 +779,7 @@ async function upscaleImageSource(filePath, metadata, dimensions, capabilities, 
   } catch (error) {
     return {
       path: filePath,
+      routing: classification,
       actions: [
         formatClassifierSummary(classification, "image"),
         withMacosRealEsrganHint(`skipped image upscaling because automatic routing failed (${normalizeErrorMessage(error)})`)
@@ -789,7 +788,16 @@ async function upscaleImageSource(filePath, metadata, dimensions, capabilities, 
   }
 }
 
-async function createAiUpscaledVideoDerivative(filePath, videoStream, dimensions, capabilities, workDir, encoder, manualCategory = null) {
+async function createAiUpscaledVideoDerivative(
+  filePath,
+  videoStream,
+  dimensions,
+  capabilities,
+  workDir,
+  encoder,
+  interpolationTargetFps = null,
+  manualRoute = null
+) {
   const extractedFramesDir = path.join(workDir, `${uuid()}-frames-in`);
   const upscaledFramesDir = path.join(workDir, `${uuid()}-frames-out`);
   const outputPath = path.join(workDir, `${uuid()}.mkv`);
@@ -798,7 +806,7 @@ async function createAiUpscaledVideoDerivative(filePath, videoStream, dimensions
 
   try {
     const framePath = await extractVideoClassificationFrame(filePath, workDir);
-    const classification = await resolveClassificationOrThrow(framePath, capabilities, "video", manualCategory);
+    const classification = await resolveClassificationOrThrow(framePath, capabilities, "video", manualRoute);
 
     await runFfmpeg([
       "-y",
@@ -829,7 +837,7 @@ async function createAiUpscaledVideoDerivative(filePath, videoStream, dimensions
       };
     }
 
-    const filters = [`scale=${dimensions.width}:${dimensions.height}:force_original_aspect_ratio=decrease`];
+    const filters = buildVideoFilterChain(dimensions, interpolationTargetFps);
     await runFfmpeg([
       "-y",
       "-hide_banner",
@@ -865,11 +873,20 @@ async function createAiUpscaledVideoDerivative(filePath, videoStream, dimensions
         path: outputPath,
         extension: ".mkv",
         mime: "video/x-matroska",
-        actions: [`generated AV1 access copy from ${result.profile.label}-upscaled frames`]
+        actions: [
+          `generated AV1 access copy from ${result.profile.label}-upscaled frames`,
+          ...(interpolationTargetFps
+            ? [`interpolated to ${formatFps(interpolationTargetFps)} fps with motion-compensated interpolation`]
+            : [])
+        ]
       },
+      routing: classification,
       actions: [
         formatClassifierSummary(classification, "video"),
-        `upscaled video frames via ${result.profile.label} ${result.scale}x before AV1 encoding`
+        `upscaled video frames via ${result.profile.label} ${result.scale}x before AV1 encoding`,
+        ...(interpolationTargetFps
+          ? [`interpolated to ${formatFps(interpolationTargetFps)} fps with motion-compensated interpolation`]
+          : [])
       ]
     };
   } catch (error) {
@@ -879,7 +896,7 @@ async function createAiUpscaledVideoDerivative(filePath, videoStream, dimensions
   }
 }
 
-async function optimizeImage(filePath, preferences, capabilities, workDir, manualCategory = null) {
+async function optimizeImage(filePath, preferences, capabilities, workDir, manualRoute = null) {
   const safeCapabilities = capabilities || {};
   const metadata = await sharp(filePath, { animated: true }).metadata();
   const actions = [];
@@ -888,6 +905,8 @@ async function optimizeImage(filePath, preferences, capabilities, workDir, manua
   const isAnimated = (metadata.pages || 1) > 1;
 
   let derivative = null;
+  let previewSourcePath = filePath;
+  let routing = null;
   if (isAnimated || BAD_IMAGE_TRANSCODE_EXTENSIONS.has(extension)) {
     actions.push("preserved original because this image format is not eligible for derivative transcoding");
   } else if (!safeCapabilities.cjxl?.available) {
@@ -899,25 +918,33 @@ async function optimizeImage(filePath, preferences, capabilities, workDir, manua
     if (preferences.optimizationMode === "lossless" && likelyLossySource) {
       actions.push("preserved original because source is already lossy");
     } else {
-      const intermediatePngPath = path.join(workDir, `${uuid()}.png`);
       const outputJxlPath = path.join(workDir, `${uuid()}.jxl`);
       const upscaleResult =
         preferences.upscaleEnabled && metadata.width && metadata.height
-          ? await upscaleImageSource(filePath, metadata, dimensions, safeCapabilities, workDir, manualCategory)
-          : { path: filePath, actions: [] };
-      let derivativePipeline = sharp(upscaleResult.path);
+          ? await upscaleImageSource(filePath, metadata, dimensions, safeCapabilities, workDir, manualRoute)
+          : { path: filePath, actions: [], routing: null };
+      previewSourcePath = upscaleResult.path || filePath;
+      routing = upscaleResult.routing ?? routing;
       actions.push(...upscaleResult.actions);
+      const canEncodeDirectly = canUseDirectJxlInput(upscaleResult.path, preferences.stripDerivativeMetadata);
+      let encodeInputPath = upscaleResult.path;
 
-      if (!preferences.stripDerivativeMetadata) {
-        derivativePipeline = derivativePipeline.withMetadata();
+      if (!canEncodeDirectly) {
+        const intermediatePngPath = path.join(workDir, `${uuid()}.png`);
+        let derivativePipeline = sharp(upscaleResult.path);
+        if (!preferences.stripDerivativeMetadata) {
+          derivativePipeline = derivativePipeline.withMetadata();
+        }
+        await derivativePipeline.png().toFile(intermediatePngPath);
+        encodeInputPath = intermediatePngPath;
       }
 
-      await derivativePipeline.png().toFile(intermediatePngPath);
-      const cjxlArgs =
-        preferences.optimizationMode === "lossless" && mathematicallyLosslessSource
-          ? [intermediatePngPath, outputJxlPath, "--effort=7", "--lossless_jpeg=0", "--modular=1"]
-          : [intermediatePngPath, outputJxlPath, "--effort=7", "--distance=1.0"];
-      await spawnCapture("cjxl", cjxlArgs);
+      await spawnCapture(
+        "cjxl",
+        buildJxlEncodeArgs(encodeInputPath, outputJxlPath, {
+          mathematicallyLossless: preferences.optimizationMode === "lossless" && mathematicallyLosslessSource
+        })
+      );
 
       derivative = {
         label: preferences.optimizationMode === "lossless" ? "optimized_lossless" : "optimized_visual",
@@ -944,20 +971,28 @@ async function optimizeImage(filePath, preferences, capabilities, workDir, manua
       codec: null
     },
     derivative,
+    routing,
     actions,
-    summary: `${metadata.width || "?"}x${metadata.height || "?"}, nearest tier ${dimensions.nearestTier}`
+    summary: `${metadata.width || "?"}x${metadata.height || "?"}, nearest tier ${dimensions.nearestTier}`,
+    previewSourcePath
   };
 }
 
-async function optimizeVideo(filePath, preferences, capabilities, workDir, manualCategory = null) {
+async function optimizeVideo(filePath, preferences, capabilities, workDir, manualRoute = null) {
   const safeCapabilities = capabilities || {};
   const probe = await getVideoProbe(filePath);
   const videoStream = probe.streams.find((stream) => stream.codec_type === "video");
   const actions = [];
   const originalExtension = extname(filePath);
-  const dimensions = resolveTierDimensions(videoStream?.width || 0, videoStream?.height || 0, preferences.videoTargetResolution);
+  const dimensions = normalizeVideoDimensions(
+    resolveTierDimensions(videoStream?.width || 0, videoStream?.height || 0, preferences.videoTargetResolution)
+  );
+  const interpolationTargetFps = preferences.videoUpscaleEnabled
+    ? resolveInterpolationTargetFps(videoStream, preferences.videoInterpolationFrameTarget)
+    : null;
 
   let derivative = null;
+  let routing = null;
   const sourceLossless = isLosslessCodec(videoStream?.codec_name);
   if (preferences.optimizationMode === "lossless" && sourceLossless) {
     const outputPath = path.join(workDir, `${uuid()}.mkv`);
@@ -988,14 +1023,25 @@ async function optimizeVideo(filePath, preferences, capabilities, workDir, manua
     actions.push("preserved original because source video is already lossy");
   } else if (safeCapabilities.av1Encoder?.value) {
     const encoder = safeCapabilities.av1Encoder.value;
-    const wantsUpscale = preferences.upscaleEnabled && shouldUpscaleToTarget(videoStream?.width, videoStream?.height, dimensions.targetHeight);
+    const wantsUpscale =
+      preferences.videoUpscaleEnabled && shouldUpscaleToTarget(videoStream?.width, videoStream?.height, dimensions.targetHeight);
     if (wantsUpscale) {
-      const aiDerivative = await createAiUpscaledVideoDerivative(filePath, videoStream, dimensions, safeCapabilities, workDir, encoder, manualCategory);
+      const aiDerivative = await createAiUpscaledVideoDerivative(
+        filePath,
+        videoStream,
+        dimensions,
+        safeCapabilities,
+        workDir,
+        encoder,
+        interpolationTargetFps,
+        manualRoute
+      );
       if (aiDerivative?.derivative) {
         derivative = aiDerivative.derivative;
+        routing = aiDerivative.routing ?? routing;
         actions.push(...aiDerivative.actions);
       } else if (aiDerivative?.error) {
-        if (aiDerivative.classification?.category) {
+        if (aiDerivative.classification?.route) {
           actions.push(formatClassifierSummary(aiDerivative.classification, "video"));
         }
         actions.push(withMacosRealEsrganHint(`skipped video upscaling because ${aiDerivative.error}`));
@@ -1004,12 +1050,14 @@ async function optimizeVideo(filePath, preferences, capabilities, workDir, manua
 
     if (!derivative) {
       const outputPath = path.join(workDir, `${uuid()}.mkv`);
+      const filters = buildVideoFilterChain(dimensions, interpolationTargetFps, wantsUpscale);
       await runFfmpeg([
         "-y",
         "-i",
         filePath,
         "-map",
         "0",
+        ...(filters.length ? ["-vf", filters.join(",")] : []),
         "-c:v",
         encoder,
         ...(encoder === "libsvtav1" ? ["-crf", "28", "-preset", "5"] : ["-crf", "30", "-cpu-used", "4"]),
@@ -1024,8 +1072,20 @@ async function optimizeVideo(filePath, preferences, capabilities, workDir, manua
         path: outputPath,
         extension: ".mkv",
         mime: "video/x-matroska",
-        actions: ["generated AV1 access copy with audio and subtitle streams preserved"]
+        actions: [
+          "generated AV1 access copy with audio and subtitle streams preserved",
+          ...(wantsUpscale ? [`upscaled video to ${dimensions.width}x${dimensions.height} with high-quality scaling`] : []),
+          ...(interpolationTargetFps
+            ? [`interpolated to ${formatFps(interpolationTargetFps)} fps with motion-compensated interpolation`]
+            : [])
+        ]
       };
+      if (wantsUpscale) {
+        actions.push(`upscaled video to ${dimensions.width}x${dimensions.height} with high-quality scaling`);
+      }
+      if (interpolationTargetFps) {
+        actions.push(`interpolated to ${formatFps(interpolationTargetFps)} fps with motion-compensated interpolation`);
+      }
     }
   } else {
     actions.push("AV1 encoder unavailable in ffmpeg build");
@@ -1042,8 +1102,10 @@ async function optimizeVideo(filePath, preferences, capabilities, workDir, manua
       codec: videoStream?.codec_name || null
     },
     derivative,
+    routing,
     actions,
-    summary: `${videoStream?.codec_name || "unknown"} ${videoStream?.width || "?"}x${videoStream?.height || "?"}, nearest tier ${dimensions.nearestTier}`
+    summary: `${videoStream?.codec_name || "unknown"} ${videoStream?.width || "?"}x${videoStream?.height || "?"}, nearest tier ${dimensions.nearestTier}`,
+    previewSourcePath: derivative?.path || filePath
   };
 }
 
@@ -1114,16 +1176,18 @@ async function generatePreviewFile(sourcePath, kind, variant, outputDir) {
 async function analyzePath(filePath, preferences, capabilities, workDir, options = {}) {
   const normalizedPreferences = {
     ...preferences,
+    videoUpscaleEnabled: preferences.videoUpscaleEnabled === true,
+    videoInterpolationFrameTarget: normalizeVideoInterpolationFrameTarget(preferences.videoInterpolationFrameTarget),
     optimizationMode:
       preferences.optimizationMode === "pick_per_file" ? "visually_lossless" : preferences.optimizationMode
   };
-  const manualCategory = options.manualClassification ?? null;
+  const manualRoute = options.manualRoute ?? options.manualClassification ?? null;
   const kind = classifyPath(filePath);
   if (kind === "image") {
-    return optimizeImage(filePath, normalizedPreferences, capabilities, workDir, manualCategory);
+    return optimizeImage(filePath, normalizedPreferences, capabilities, workDir, manualRoute);
   }
   if (kind === "video") {
-    return optimizeVideo(filePath, normalizedPreferences, capabilities, workDir, manualCategory);
+    return optimizeVideo(filePath, normalizedPreferences, capabilities, workDir, manualRoute);
   }
 
   return {
@@ -1137,23 +1201,30 @@ async function analyzePath(filePath, preferences, capabilities, workDir, options
       codec: null
     },
     derivative: null,
+    routing: null,
     actions: ["stored as general file object"],
-    summary: "generic file"
+    summary: "generic file",
+    previewSourcePath: null
   };
 }
 
-async function inspectManualClassificationRequirement(filePath, preferences, capabilities, workDir, manualCategory = null) {
+async function inspectManualRoutingRequirement(filePath, preferences, capabilities, workDir, manualRoute = null) {
   const normalizedPreferences = {
     ...preferences,
+    videoUpscaleEnabled: preferences.videoUpscaleEnabled === true,
+    videoInterpolationFrameTarget: normalizeVideoInterpolationFrameTarget(preferences.videoInterpolationFrameTarget),
     optimizationMode:
       preferences.optimizationMode === "pick_per_file" ? "visually_lossless" : preferences.optimizationMode
   };
   const kind = classifyPath(filePath);
-  if (manualCategory || !normalizedPreferences.upscaleEnabled) {
+  if (manualRoute || (!normalizedPreferences.upscaleEnabled && !normalizedPreferences.videoUpscaleEnabled)) {
     return null;
   }
 
   if (kind === "image") {
+    if (!normalizedPreferences.upscaleEnabled) {
+      return null;
+    }
     const metadata = await sharp(filePath, { animated: true }).metadata();
     const extension = extname(filePath);
     const isAnimated = (metadata.pages || 1) > 1;
@@ -1173,12 +1244,12 @@ async function inspectManualClassificationRequirement(filePath, preferences, cap
     return {
       mediaType: "image",
       ...automatic,
-      suggestedCategory: automatic.classification?.category ?? null
+      suggestedRoute: automatic.classification?.route ?? null
     };
   }
 
   if (kind === "video") {
-    if (normalizedPreferences.optimizationMode === "lossless" || !capabilities?.av1Encoder?.value) {
+    if (normalizedPreferences.optimizationMode === "lossless" || !normalizedPreferences.videoUpscaleEnabled || !capabilities?.av1Encoder?.value) {
       return null;
     }
 
@@ -1198,7 +1269,7 @@ async function inspectManualClassificationRequirement(filePath, preferences, cap
     return {
       mediaType: "video",
       ...automatic,
-      suggestedCategory: automatic.classification?.category ?? null
+      suggestedRoute: automatic.classification?.route ?? null
     };
   }
 
@@ -1206,18 +1277,23 @@ async function inspectManualClassificationRequirement(filePath, preferences, cap
 }
 
 module.exports = {
-  ManualClassificationRequiredError,
+  ManualRoutingRequiredError,
   analyzePath,
   attemptAutomaticClassification,
   buildRealEsrganArgs,
   buildRealCuganArgs,
   buildWaifu2xArgs,
+  buildVideoFilterChain,
   buildAutomaticUpscaleProfiles,
   classifyPath,
   detectAv1Encoder,
+  formatFps,
   generatePreviewFile,
-  inspectManualClassificationRequirement,
+  inspectManualRoutingRequirement,
+  parseFrameRate,
+  resolveInterpolationTargetFps,
   selectUpscaleFactor,
   shouldUpscaleToTarget,
-  VISUAL_CLASSIFICATION_CATEGORIES
+  UPSCALE_ROUTES,
+  getClassificationMargin
 };
