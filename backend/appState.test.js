@@ -44,29 +44,36 @@ test("archive scans only include supported v3 archives", async () => {
   });
 });
 
-test("initial state keeps image and video AI upscaling disabled by default", async () => {
+test("initial state exposes the current settings schema", async () => {
   await withTempDir(async (tempDir) => {
     const state = await createInitialState(path.join(tempDir, "user-data"), tempDir);
-    assert.equal(state.settings.upscaleEnabled, false);
-    assert.equal(state.settings.videoUpscaleEnabled, false);
-    assert.equal(state.settings.videoInterpolationFrameTarget, "off");
+    assert.deepEqual(Object.keys(state.settings).sort(), [
+      "argonProfile",
+      "compressionBehavior",
+      "deleteOriginalFilesAfterSuccessfulUpload",
+      "optimizationMode",
+      "preferredArchiveRoot",
+      "sessionIdleMinutes",
+      "sessionLockOnHide",
+      "stripDerivativeMetadata"
+    ]);
   });
 });
 
-test("initial state normalizes invalid interpolation targets from settings.json", async () => {
+test("initial state normalizes persisted settings", async () => {
   await withTempDir(async (tempDir) => {
     const userDataPath = path.join(tempDir, "user-data");
     await fs.mkdir(userDataPath, { recursive: true });
     await fs.writeFile(
       path.join(userDataPath, "settings.json"),
       JSON.stringify({
-        videoInterpolationFrameTarget: "240",
+        sessionIdleMinutes: "bad",
         preferredArchiveRoot: ""
       })
     );
 
     const state = await createInitialState(userDataPath, tempDir);
-    assert.equal(state.settings.videoInterpolationFrameTarget, "off");
+    assert.equal(state.settings.sessionIdleMinutes, 0);
     assert.equal(state.settings.preferredArchiveRoot, path.join(tempDir, "Stow Archives"));
   });
 });

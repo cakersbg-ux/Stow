@@ -1,13 +1,6 @@
-export type UpscaleRoute = "photo_gentle" | "photo_general" | "art_clean" | "art_anime" | "text_ui";
-
 export type Settings = {
-  imageTargetResolution: "1080p" | "1440p" | "4k";
-  videoTargetResolution: "1080p" | "1440p" | "4k";
   compressionBehavior: "fast" | "balanced" | "max";
   optimizationMode: "lossless" | "visually_lossless" | "pick_per_file";
-  upscaleEnabled: boolean;
-  videoUpscaleEnabled: boolean;
-  videoInterpolationFrameTarget: "off" | "30" | "60" | "120";
   stripDerivativeMetadata: boolean;
   deleteOriginalFilesAfterSuccessfulUpload: boolean;
   argonProfile: "balanced" | "strong" | "constrained";
@@ -80,15 +73,6 @@ export type ArchiveRevision = {
     codec?: string | null;
   };
   overrideMode?: "lossless" | "visually_lossless" | null;
-  routing: {
-    route: UpscaleRoute;
-    confidence: number;
-    provider: string;
-    alternatives: Array<{
-      route: UpscaleRoute;
-      score: number;
-    }>;
-  } | null;
   summary: string;
   actions: string[];
   originalArtifact: ArtifactDescriptor;
@@ -136,25 +120,6 @@ export type PreviewDescriptor = {
   mime: string;
   revisionId: string;
   kind: "thumbnail" | "preview";
-};
-
-export type ManualRoutingItem = {
-  absolutePath: string;
-  relativePath: string;
-  mediaType: "image" | "video";
-  failureCode: "runtime_error" | "model_unavailable";
-  reason: string;
-  suggestedRoute: UpscaleRoute | null;
-  choices: UpscaleRoute[];
-};
-
-export type ManualRoutingRequest = {
-  items: ManualRoutingItem[];
-};
-
-export type AddPathsResult = {
-  shellState: AppShellState;
-  manualRoutingRequest: ManualRoutingRequest | null;
 };
 
 export type ArchiveSessionInfo = {
@@ -224,11 +189,11 @@ declare global {
       removeRecentArchive: (archivePath: string) => Promise<AppShellState>;
       deleteArchive: (archivePath: string) => Promise<AppShellState>;
       listDetectedArchives: () => Promise<DetectedArchive[]>;
-      addPaths: (paths: string[], manualRoutes?: Record<string, UpscaleRoute>) => Promise<AddPathsResult>;
+      addPaths: (paths: string[]) => Promise<AppShellState>;
       listEntries: (payload: { offset: number; limit: number }) => Promise<{ total: number; items: ArchiveEntryListItem[] }>;
       getEntryDetail: (entryId: string) => Promise<ArchiveEntryDetail>;
       getArchiveStats: () => Promise<ArchiveStats>;
-      reprocessEntry: (entryId: string, overrideMode: "lossless" | "visually_lossless", routeOverride?: UpscaleRoute | null) => Promise<AppShellState>;
+      reprocessEntry: (entryId: string, overrideMode: "lossless" | "visually_lossless") => Promise<AppShellState>;
       deleteEntry: (entryId: string) => Promise<AppShellState>;
       renameEntry: (entryId: string, name: string) => Promise<AppShellState>;
       exportEntry: (entryId: string, variant: "original" | "optimized") => Promise<AppShellState>;

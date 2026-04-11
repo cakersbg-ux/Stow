@@ -1,6 +1,6 @@
 # Stow
 
-Stow is a local-first desktop archive utility for files, images, and video. It keeps the UI deliberately plain and pushes the real work into a native-capable backend: archive manifests, chunk/object storage, dedupe, zstd compression, Argon2id password derivation, XChaCha20-Poly1305 secretstream encryption, image/video optimization, and export.
+Stow is a local-first desktop archive utility for files, images, and video. It keeps the UI deliberately plain and pushes the real work into a native-capable backend: archive manifests, chunk/object storage, dedupe, zstd compression, Argon2id password derivation, XChaCha20-Poly1305 secretstream encryption, image/video derivatives, and export.
 
 ## Stack
 
@@ -17,7 +17,7 @@ Stow is a local-first desktop archive utility for files, images, and video. It k
 
 - Create a `.stow` archive from the app with archive-local password protection.
 - Set global default preferences for image target resolution, video target resolution, compression behavior, optimization mode, metadata stripping, and Argon2 profile.
-- Auto-install missing local tooling on macOS and Windows, including managed AI upscalers when upscaling is enabled.
+- Auto-install missing local tooling on macOS and Windows when supported.
 - Open an existing archive by path and password.
 - Reopen archives from the default Stow archive folder.
 - Add files or whole folders. Folder ingest preserves relative paths.
@@ -25,7 +25,6 @@ Stow is a local-first desktop archive utility for files, images, and video. It k
 - Apply compression after dedupe and encryption after compression.
 - Keep originals for archival correctness and generate optimized derivatives when the chosen rules allow it.
 - Generate JPEG XL derivatives for images when `cjxl` is present.
-- Automatically classify media with the `Stout` router model and route image/video upscaling through `realesrgan-ncnn-vulkan`, `realcugan-ncnn-vulkan`, or `waifu2x-ncnn-vulkan` depending on the content.
 - Generate FFV1 archival masters or AV1 access copies for video when the source/tooling allows it.
 - Reprocess a selected entry with a per-file override between lossless and visually lossless.
 - Export either the preserved original or the latest optimized derivative.
@@ -35,7 +34,6 @@ Stow is a local-first desktop archive utility for files, images, and video. It k
 
 - Required for the full archive pipeline: `zstd`
 - Required for JPEG XL image derivatives: `cjxl`
-- Optional but auto-managed when upscaling is enabled: `realesrgan-ncnn-vulkan`, `realcugan-ncnn-vulkan`, `waifu2x-ncnn-vulkan`
 - Optional for heavier offline compression mode: `7z`
 
 The app detects these tools at runtime and shows their availability in the sidebar. Missing optional tools skip those optimization paths instead of blocking the archive.

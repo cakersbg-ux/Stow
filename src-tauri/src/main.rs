@@ -560,7 +560,6 @@ struct DeleteArchivePayload {
 #[serde(rename_all = "camelCase")]
 struct AddPathsPayload {
     paths: Vec<String>,
-    manual_routes: Option<HashMap<String, String>>,
 }
 
 #[derive(Deserialize)]
@@ -568,7 +567,6 @@ struct AddPathsPayload {
 struct ReprocessEntryPayload {
     entry_id: String,
     override_mode: String,
-    route_override: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -775,8 +773,7 @@ async fn archive_add_paths(state: State<'_, AppState>, payload: AddPathsPayload)
         Arc::clone(&state.backend),
         "archive:add-paths",
         json!({
-            "paths": payload.paths,
-            "manualRoutes": payload.manual_routes
+            "paths": payload.paths
         }),
     )
     .await
@@ -792,8 +789,7 @@ async fn archive_reprocess_entry(
         "archive:reprocess-entry",
         json!({
             "entryId": payload.entry_id,
-            "overrideMode": payload.override_mode,
-            "routeOverride": payload.route_override
+            "overrideMode": payload.override_mode
         }),
     )
     .await

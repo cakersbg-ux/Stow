@@ -1,7 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
-  AddPathsResult,
   AppShellState,
   ArchiveEntryDetail,
   ArchiveEntryListItem,
@@ -9,8 +8,7 @@ import type {
   ArchiveStats,
   DetectedArchive,
   PreviewDescriptor,
-  Settings,
-  UpscaleRoute
+  Settings
 } from "./types";
 
 type OverrideMode = "lossless" | "visually_lossless";
@@ -64,14 +62,13 @@ const bridge = {
   removeRecentArchive: (archivePath: string) => invoke<AppShellState>("archives_remove", { payload: { archivePath } }),
   deleteArchive: (archivePath: string) => invoke<AppShellState>("archives_delete", { payload: { archivePath } }),
   listDetectedArchives: () => invoke<DetectedArchive[]>("archives_list_detected"),
-  addPaths: (paths: string[], manualRoutes: Record<string, UpscaleRoute> = {}) =>
-    invoke<AddPathsResult>("archive_add_paths", { payload: { paths, manualRoutes } }),
+  addPaths: (paths: string[]) => invoke<AppShellState>("archive_add_paths", { payload: { paths } }),
   listEntries: (payload: { offset: number; limit: number }) =>
     invoke<{ total: number; items: ArchiveEntryListItem[] }>("archive_list_entries", { payload }),
   getEntryDetail: (entryId: string) => invoke<ArchiveEntryDetail>("archive_get_entry_detail", { payload: { entryId } }),
   getArchiveStats: () => invoke<ArchiveStats>("archive_get_stats"),
-  reprocessEntry: (entryId: string, overrideMode: OverrideMode, routeOverride: UpscaleRoute | null = null) =>
-    invoke<AppShellState>("archive_reprocess_entry", { payload: { entryId, overrideMode, routeOverride } }),
+  reprocessEntry: (entryId: string, overrideMode: OverrideMode) =>
+    invoke<AppShellState>("archive_reprocess_entry", { payload: { entryId, overrideMode } }),
   deleteEntry: (entryId: string) => invoke<AppShellState>("archive_delete_entry", { payload: { entryId } }),
   renameEntry: (entryId: string, name: string) => invoke<AppShellState>("archive_rename_entry", { payload: { entryId, name } }),
   exportEntry: (entryId: string, variant: ExportVariant) =>

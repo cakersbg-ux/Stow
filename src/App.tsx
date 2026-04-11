@@ -10,22 +10,14 @@ import type {
   ArchiveStats,
   DetectedArchive,
   InstallStatus,
-  ManualRoutingItem,
   PreviewDescriptor,
   RecentArchive,
-  Settings,
-  UpscaleRoute
+  Settings
 } from "./types";
-import { getUpscaleRouteDescription, getUpscaleRouteLabel, UPSCALE_ROUTES } from "./upscaleRoutes";
 
 const defaultSettings: Settings = {
-  imageTargetResolution: "1440p",
-  videoTargetResolution: "1080p",
   compressionBehavior: "balanced",
   optimizationMode: "visually_lossless",
-  upscaleEnabled: false,
-  videoUpscaleEnabled: false,
-  videoInterpolationFrameTarget: "off",
   stripDerivativeMetadata: true,
   deleteOriginalFilesAfterSuccessfulUpload: true,
   argonProfile: "balanced",
@@ -54,17 +46,12 @@ const defaultShellState: AppShellState = {
 };
 
 const settingHints = {
-  imageTargetResolution: "Target size for still-image derivatives.",
-  videoTargetResolution: "Target size for video derivatives.",
   compressionBehavior: "How aggressively to compress stored chunks.",
   optimizationMode: "Choose between lossless and visually lossless derivatives.",
   argonProfile: "Password derivation cost.",
   preferredArchiveRoot: "Default folder for new archives.",
   sessionIdleMinutes: "Idle minutes before automatic locking. Use 0 to disable.",
   sessionLockOnHide: "Lock the archive when the app is hidden.",
-  upscaleEnabled: "Upscale still images below the selected target tier using automatic routing.",
-  videoUpscaleEnabled: "Upscale videos before AV1 encoding. This is the most CPU-, GPU-, and temp-disk-intensive path.",
-  videoInterpolationFrameTarget: "Generate intermediate frames up to this FPS target.",
   stripDerivativeMetadata: "Remove non-essential metadata from derivatives.",
   deleteOriginalFilesAfterSuccessfulUpload: "Delete source files after a successful ingest."
 } as const;
@@ -78,11 +65,6 @@ type ArchiveSortMode = "recent_desc" | "recent_asc" | "name_asc" | "name_desc" |
 type ArchiveBrowserItem = Omit<DetectedArchive, "sizeBytes"> & {
   source: "detected" | "recent";
   sizeBytes: number | null;
-};
-
-type ManualRoutingDialogState = {
-  items: ManualRoutingItem[];
-  selections: Record<string, UpscaleRoute>;
 };
 
 function formatBytes(bytes: number) {
@@ -119,13 +101,6 @@ function formatArchiveSize(bytes: number | null) {
     return "size unavailable";
   }
   return formatBytes(bytes);
-}
-
-function formatRoutingConfidence(value: number | null | undefined) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "n/a";
-  }
-  return `${Math.round(value * 100)}%`;
 }
 
 function getArchiveSortLabel(sortMode: ArchiveSortMode) {
@@ -305,20 +280,6 @@ function SettingsForm(props: {
 
   return (
     <div className="settings-grid">
-      <SettingField label="Image target resolution" hint={settingHints.imageTargetResolution}>
-        <select disabled={disabled} value={value.imageTargetResolution} onChange={(event) => set("imageTargetResolution", event.target.value as Settings["imageTargetResolution"])}>
-          <option value="1080p">1080p</option>
-          <option value="1440p">1440p</option>
-          <option value="4k">4k</option>
-        </select>
-      </SettingField>
-      <SettingField label="Video target resolution" hint={settingHints.videoTargetResolution}>
-        <select disabled={disabled} value={value.videoTargetResolution} onChange={(event) => set("videoTargetResolution", event.target.value as Settings["videoTargetResolution"])}>
-          <option value="1080p">1080p</option>
-          <option value="1440p">1440p</option>
-          <option value="4k">4k</option>
-        </select>
-      </SettingField>
       <SettingField label="Compression behavior" hint={settingHints.compressionBehavior}>
         <select disabled={disabled} value={value.compressionBehavior} onChange={(event) => set("compressionBehavior", event.target.value as Settings["compressionBehavior"])}>
           <option value="fast">fast</option>
@@ -353,28 +314,6 @@ function SettingsForm(props: {
           onChange={(event) => set("sessionIdleMinutes", Math.max(0, Number(event.target.value || 0)))}
         />
       </SettingField>
-      <ToggleField label="Image upscaling" hint={settingHints.upscaleEnabled} checked={value.upscaleEnabled} disabled={disabled} onChange={(checked) => set("upscaleEnabled", checked)} />
-      <ToggleField
-        label="Video upscaling"
-        hint={settingHints.videoUpscaleEnabled}
-        checked={value.videoUpscaleEnabled}
-        disabled={disabled}
-        onChange={(checked) => set("videoUpscaleEnabled", checked)}
-      />
-      {value.videoUpscaleEnabled ? (
-        <SettingField label="Interpolation frame target" hint={settingHints.videoInterpolationFrameTarget}>
-          <select
-            disabled={disabled}
-            value={value.videoInterpolationFrameTarget}
-            onChange={(event) => set("videoInterpolationFrameTarget", event.target.value as Settings["videoInterpolationFrameTarget"])}
-          >
-            <option value="off">Keep original</option>
-            <option value="30">30 fps</option>
-            <option value="60">60 fps</option>
-            <option value="120">120 fps</option>
-          </select>
-        </SettingField>
-      ) : null}
       <ToggleField
         label="Strip derivative metadata"
         hint={settingHints.stripDerivativeMetadata}
@@ -951,75 +890,6 @@ function EntryDeleteConfirmationDialog(props: {
   );
 }
 
-function ManualRoutingDialog(props: {
-  dialog: ManualRoutingDialogState | null;
-  onChange: (absolutePath: string, route: UpscaleRoute) => void;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  if (!props.dialog) {
-    return null;
-  }
-
-  return createPortal(
-    <div className="manual-routing-layer" role="presentation">
-      <div className="manual-routing-dialog" role="dialog" aria-modal="true" aria-labelledby="manual-routing-title">
-        <div className="manual-routing-header">
-          <div>
-            <div className="manual-routing-kicker">Manual Route Required</div>
-            <h2 id="manual-routing-title">Automatic upscale routing needs a human override.</h2>
-          </div>
-          <button type="button" onClick={props.onCancel}>
-            Cancel upload
-          </button>
-        </div>
-        <div className="manual-routing-body">
-          <p className="muted">
-            Stout could not produce a trustworthy route for the files below. Pick the safest upscale path for each item so Stow does not guess blindly.
-          </p>
-          <div className="manual-routing-list">
-            {props.dialog.items.map((item) => (
-              <div key={item.absolutePath} className="manual-routing-card">
-                <div className="manual-routing-card-header">
-                  <strong>{item.relativePath}</strong>
-                  <span className="manual-routing-type">{item.mediaType}</span>
-                </div>
-                <span className="muted">{item.reason}</span>
-                <label className="setting-field">
-                  <span>Choose upscale route</span>
-                  <select
-                    value={props.dialog.selections[item.absolutePath]}
-                    onChange={(event) => props.onChange(item.absolutePath, event.target.value as UpscaleRoute)}
-                  >
-                    {item.choices.map((choice) => (
-                      <option key={choice} value={choice}>
-                        {getUpscaleRouteLabel(choice)}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="muted">{getUpscaleRouteDescription(props.dialog.selections[item.absolutePath])}</span>
-                </label>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="manual-routing-footer">
-          <span className="muted">{props.dialog.items.length} file{props.dialog.items.length === 1 ? "" : "s"} waiting for routing</span>
-          <div className="actions">
-            <button type="button" onClick={props.onCancel}>
-              Cancel upload
-            </button>
-            <button type="button" onClick={props.onConfirm}>
-              Continue upload
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>,
-    document.body
-  );
-}
-
 function InstallOverlay(props: { installStatus: InstallStatus }) {
   const progress = props.installStatus.totalSteps > 0 ? props.installStatus.completedSteps / props.installStatus.totalSteps : 0;
   return (
@@ -1064,7 +934,6 @@ function App() {
   const [openPassword, setOpenPassword] = useState("");
   const [unlockPassword, setUnlockPassword] = useState("");
   const [overrideMode, setOverrideMode] = useState<"lossless" | "visually_lossless">("visually_lossless");
-  const [routeOverride, setRouteOverride] = useState<UpscaleRoute | "auto">("auto");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [archiveBrowserOpen, setArchiveBrowserOpen] = useState(false);
   const [archiveBrowserLoading, setArchiveBrowserLoading] = useState(false);
@@ -1077,12 +946,10 @@ function App() {
   const [loadedOffsets, setLoadedOffsets] = useState<Set<number>>(new Set());
   const [renamingEntryId, setRenamingEntryId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [manualRoutingDialog, setManualRoutingDialog] = useState<ManualRoutingDialogState | null>(null);
   const uploadQueueRef = useRef<string[][]>([]);
   const uploadQueueRunningRef = useRef(false);
   const wasInstallActiveRef = useRef(shellState.installStatus.active);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
-  const manualRoutingResolverRef = useRef<((value: Record<string, UpscaleRoute> | null) => void) | null>(null);
 
   const archiveUnlocked = Boolean(shellState.archive?.unlocked && shellState.archive.summary);
   const selectedArchiveIsUnlocked = Boolean(shellState.archive?.unlocked && shellState.archive?.path === openArchivePath);
@@ -1115,29 +982,6 @@ function App() {
     } finally {
       setIsBusy(false);
     }
-  }
-
-  function closeManualRoutingDialog(nextSelections: Record<string, UpscaleRoute> | null) {
-    const resolver = manualRoutingResolverRef.current;
-    manualRoutingResolverRef.current = null;
-    setManualRoutingDialog(null);
-    if (resolver) {
-      resolver(nextSelections);
-    }
-  }
-
-  function requestManualRouting(items: ManualRoutingItem[]) {
-    setStatus("Waiting for manual routing");
-    return new Promise<Record<string, UpscaleRoute> | null>((resolve) => {
-      const selections = Object.fromEntries(
-        items.map((item) => [item.absolutePath, item.suggestedRoute ?? item.choices[0] ?? UPSCALE_ROUTES[0]])
-      ) as Record<string, UpscaleRoute>;
-      manualRoutingResolverRef.current = resolve;
-      setManualRoutingDialog({
-        items,
-        selections
-      });
-    });
   }
 
   async function refreshEntries(offset = 0, reset = false) {
@@ -1387,11 +1231,6 @@ function App() {
   }, [selectedEntry?.id, selectedEntry?.latestRevisionId]);
 
   useEffect(() => {
-    const revision = selectedEntry?.revisions.find((candidate) => candidate.id === selectedEntry.latestRevisionId) ?? selectedEntry?.revisions[0] ?? null;
-    setRouteOverride(revision?.routing?.route ?? "auto");
-  }, [selectedEntry?.id, selectedEntry?.latestRevisionId]);
-
-  useEffect(() => {
     if (!selectedEntry || renamingEntryId !== selectedEntry.id || !renameInputRef.current) {
       return;
     }
@@ -1546,26 +1385,9 @@ function App() {
         if (!batch) {
           break;
         }
-        let manualRoutes: Record<string, UpscaleRoute> = {};
-
-        while (true) {
-          setStatus("Uploading files");
-          const next = await window.stow.addPaths(batch, manualRoutes);
-          applyShellState(next.shellState);
-          if (!next.manualRoutingRequest?.items.length) {
-            break;
-          }
-
-          const selection = await requestManualRouting(next.manualRoutingRequest.items);
-          if (!selection) {
-            setStatus("Upload cancelled");
-            break;
-          }
-          manualRoutes = {
-            ...manualRoutes,
-            ...selection
-          };
-        }
+        setStatus("Uploading files");
+        const next = await window.stow.addPaths(batch);
+        applyShellState(next);
       }
       setStatus("Ready");
     } catch (error) {
@@ -1906,16 +1728,6 @@ function App() {
                       <span>Updated: {formatDateTime(detailRevision.addedAt)}</span>
                       <span>Mode: {detailRevision.overrideMode ?? "archive default"}</span>
                     </div>
-                    <div className="detail-row">
-                      <span>Route: {detailRevision.routing ? getUpscaleRouteLabel(detailRevision.routing.route) : "not used"}</span>
-                      <span>Confidence: {detailRevision.routing ? formatRoutingConfidence(detailRevision.routing.confidence) : "n/a"}</span>
-                    </div>
-                    {detailRevision.routing?.alternatives[0] ? (
-                      <div className="detail-row">
-                        <span>Fallback idea: {getUpscaleRouteLabel(detailRevision.routing.alternatives[0].route)}</span>
-                        <span>{formatRoutingConfidence(detailRevision.routing.alternatives[0].score)}</span>
-                      </div>
-                    ) : null}
                     <div className="actions">
                       <button type="button" disabled={uiLocked} onClick={() => void runTask("Opening in native view", () => window.stow.openEntryExternally(selectedEntry.id))}>
                         Open
@@ -1939,24 +1751,10 @@ function App() {
                         <option value="visually_lossless">visually lossless</option>
                         <option value="lossless">lossless</option>
                       </select>
-                      {selectedEntry.fileKind === "image" || selectedEntry.fileKind === "video" ? (
-                        <select disabled={uiLocked} value={routeOverride} onChange={(event) => setRouteOverride(event.target.value as UpscaleRoute | "auto")}>
-                          <option value="auto">auto route</option>
-                          {UPSCALE_ROUTES.map((route) => (
-                            <option key={route} value={route}>
-                              {getUpscaleRouteLabel(route)}
-                            </option>
-                          ))}
-                        </select>
-                      ) : null}
                       <button
                         type="button"
                         disabled={uiLocked}
-                        onClick={() =>
-                          void runTask("Reprocessing entry", () =>
-                            window.stow.reprocessEntry(selectedEntry.id, overrideMode, routeOverride === "auto" ? null : routeOverride)
-                          )
-                        }
+                        onClick={() => void runTask("Reprocessing entry", () => window.stow.reprocessEntry(selectedEntry.id, overrideMode))}
                       >
                         Reprocess
                       </button>
@@ -2022,25 +1820,6 @@ function App() {
         disabled={uiLocked}
         onCancel={() => setEntryDeleteCandidate(null)}
         onConfirm={() => void confirmDeleteEntry()}
-      />
-
-      <ManualRoutingDialog
-        dialog={manualRoutingDialog}
-        onChange={(absolutePath, route) =>
-          setManualRoutingDialog((current) =>
-            current
-              ? {
-                  ...current,
-                  selections: {
-                    ...current.selections,
-                    [absolutePath]: route
-                  }
-                }
-              : current
-          )
-        }
-        onCancel={() => closeManualRoutingDialog(null)}
-        onConfirm={() => closeManualRoutingDialog(manualRoutingDialog?.selections ?? null)}
       />
 
       {settingsOpen ? (

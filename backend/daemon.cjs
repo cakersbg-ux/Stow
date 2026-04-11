@@ -88,7 +88,6 @@ function appendToolingLogs(installResult) {
 
 async function runRuntimeToolSetup() {
   const toolsDir = path.join(state.userDataPath, "tools");
-  const wantsUpscaling = state.settings?.upscaleEnabled !== false || state.settings?.videoUpscaleEnabled === true;
 
   state.installStatus = createInstallStatus();
   emitShellStateUpdate();
@@ -96,7 +95,6 @@ async function runRuntimeToolSetup() {
   try {
     const installResult = await ensureRuntimeTools({
       toolsDir,
-      enableUpscaling: wantsUpscaling,
       onProgress: (installStatus) => {
         state.installStatus = installStatus;
         emitShellStateUpdate();
@@ -155,23 +153,15 @@ async function handleCommand(method, payload) {
 
     case "settings:save": {
       await ensureInteractive();
-      const previousUpscaleEnabled = Boolean(state.settings?.upscaleEnabled) || Boolean(state.settings?.videoUpscaleEnabled);
       await archiveService.saveSettings(payload);
       emitShellStateUpdate();
-      if (!previousUpscaleEnabled && (state.settings?.upscaleEnabled || state.settings?.videoUpscaleEnabled)) {
-        await runRuntimeToolSetup();
-      }
       return sanitizeShellState(state);
     }
 
     case "settings:reset": {
       await ensureInteractive();
-      const previousUpscaleEnabled = Boolean(state.settings?.upscaleEnabled) || Boolean(state.settings?.videoUpscaleEnabled);
       await archiveService.resetSettings();
       emitShellStateUpdate();
-      if (!previousUpscaleEnabled && (state.settings?.upscaleEnabled || state.settings?.videoUpscaleEnabled)) {
-        await runRuntimeToolSetup();
-      }
       return sanitizeShellState(state);
     }
 
@@ -224,17 +214,14 @@ async function handleCommand(method, payload) {
     case "archive:add-paths":
       await ensureInteractive();
       {
-        const result = await archiveService.addPaths(payload.paths || [], payload.manualRoutes || {});
+        await archiveService.addPaths(payload.paths || []);
         emitShellStateUpdate();
-        return {
-          shellState: sanitizeShellState(state),
-          manualRoutingRequest: result?.manualRoutingRequest ?? null
-        };
+        return sanitizeShellState(state);
       }
 
     case "archive:reprocess-entry":
       await ensureInteractive();
-      await archiveService.reprocessEntry(payload.entryId, payload.overrideMode, payload.routeOverride || null);
+      await archiveService.reprocessEntry(payload.entryId, payload.overrideMode);
       emitShellStateUpdate();
       return sanitizeShellState(state);
 

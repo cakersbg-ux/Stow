@@ -3,13 +3,8 @@ const path = require("node:path");
 const { createInstallStatus } = require("./tooling");
 
 const DEFAULT_SETTINGS = {
-  imageTargetResolution: "1440p",
-  videoTargetResolution: "1080p",
   compressionBehavior: "balanced",
   optimizationMode: "visually_lossless",
-  upscaleEnabled: false,
-  videoUpscaleEnabled: false,
-  videoInterpolationFrameTarget: "off",
   stripDerivativeMetadata: true,
   deleteOriginalFilesAfterSuccessfulUpload: true,
   argonProfile: "balanced",
@@ -18,12 +13,9 @@ const DEFAULT_SETTINGS = {
   sessionLockOnHide: false
 };
 const SUPPORTED_MANIFEST_VERSION = 3;
-const IMAGE_TARGET_RESOLUTIONS = new Set(["1080p", "1440p", "4k"]);
-const VIDEO_TARGET_RESOLUTIONS = new Set(["1080p", "1440p", "4k"]);
 const COMPRESSION_BEHAVIORS = new Set(["fast", "balanced", "max"]);
 const OPTIMIZATION_MODES = new Set(["lossless", "visually_lossless", "pick_per_file"]);
 const ARGON_PROFILES = new Set(["balanced", "strong", "constrained"]);
-const VIDEO_INTERPOLATION_FRAME_TARGETS = new Set(["off", "30", "60", "120"]);
 
 const DETECTED_ARCHIVE_SKIP_DIRS = new Set([
   ".cache",
@@ -219,17 +211,8 @@ function normalizeInteger(value, fallback, min = 0) {
 function normalizeSettings(nextSettings, defaultArchiveRoot) {
   const source = nextSettings && typeof nextSettings === "object" ? nextSettings : {};
   return {
-    imageTargetResolution: normalizeEnum(source.imageTargetResolution, IMAGE_TARGET_RESOLUTIONS, DEFAULT_SETTINGS.imageTargetResolution),
-    videoTargetResolution: normalizeEnum(source.videoTargetResolution, VIDEO_TARGET_RESOLUTIONS, DEFAULT_SETTINGS.videoTargetResolution),
     compressionBehavior: normalizeEnum(source.compressionBehavior, COMPRESSION_BEHAVIORS, DEFAULT_SETTINGS.compressionBehavior),
     optimizationMode: normalizeEnum(source.optimizationMode, OPTIMIZATION_MODES, DEFAULT_SETTINGS.optimizationMode),
-    upscaleEnabled: normalizeBoolean(source.upscaleEnabled, DEFAULT_SETTINGS.upscaleEnabled),
-    videoUpscaleEnabled: normalizeBoolean(source.videoUpscaleEnabled, DEFAULT_SETTINGS.videoUpscaleEnabled),
-    videoInterpolationFrameTarget: normalizeEnum(
-      source.videoInterpolationFrameTarget,
-      VIDEO_INTERPOLATION_FRAME_TARGETS,
-      DEFAULT_SETTINGS.videoInterpolationFrameTarget
-    ),
     stripDerivativeMetadata: normalizeBoolean(source.stripDerivativeMetadata, DEFAULT_SETTINGS.stripDerivativeMetadata),
     deleteOriginalFilesAfterSuccessfulUpload: normalizeBoolean(
       source.deleteOriginalFilesAfterSuccessfulUpload,
@@ -264,8 +247,6 @@ async function createInitialState(userDataPath, homeDir) {
     homeDir,
     settingsPath,
     previewCachePath: path.join(userDataPath, "preview-cache"),
-    upscaleRouterFeedbackPath: path.join(userDataPath, "upscale-router-feedback.jsonl"),
-    upscaleRouterFeedbackSamplesPath: path.join(userDataPath, "upscale-router-feedback-samples"),
     runtimeTempPath: path.join(userDataPath, "runtime"),
     defaultArchiveRoot,
     settings,

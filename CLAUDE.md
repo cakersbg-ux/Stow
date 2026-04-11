@@ -9,7 +9,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Frontend**: Vite + React 19, TypeScript — lives in `src/`
 - **Desktop shell**: Tauri 2 / Rust — lives in `src-tauri/`
 - **Backend services**: Node.js (CommonJS) — lives in `backend/`
-- **ML / training**: Node.js scripts — lives in `training/`
 
 ## Key Commands
 

@@ -7,11 +7,6 @@ const ffmpegStatic = require("ffmpeg-static");
 const ffprobeStatic = require("ffprobe-static");
 const { detectAv1Encoder } = require("./mediaTools");
 
-const BUNDLED_UPSCALE_ROUTER_MODEL_PATH = path.join(__dirname, "generated", "model_quantized.onnx");
-const REAL_ESRGAN_COMMANDS = ["realesrgan-ncnn-vulkan", "real-esrgan-ncnn-vulkan"];
-const REAL_CUGAN_COMMANDS = ["realcugan-ncnn-vulkan"];
-const WAIFU2X_COMMANDS = ["waifu2x-ncnn-vulkan"];
-
 const INSTALLABLE_TOOLS = [
   {
     key: "zstd",
@@ -24,39 +19,6 @@ const INSTALLABLE_TOOLS = [
     label: "JPEG XL",
     probes: [{ command: "cjxl", args: ["--version"] }],
     installCandidates: ["brew:jpeg-xl", "managed:cjxl"]
-  },
-  {
-    key: "realEsrgan",
-    label: "Real-ESRGAN",
-    probes: REAL_ESRGAN_COMMANDS.map((command) => ({ command, args: ["-h"] })),
-    managedExecutable: process.platform === "win32" ? "realesrgan-ncnn-vulkan.exe" : "realesrgan-ncnn-vulkan",
-    installCandidates: ["managed:realEsrgan"],
-    reason: "realesrgan-ncnn-vulkan not detected"
-  },
-  {
-    key: "realCugan",
-    label: "Real-CUGAN",
-    probes: REAL_CUGAN_COMMANDS.map((command) => ({ command, args: ["-h"] })),
-    managedExecutable: process.platform === "win32" ? "realcugan-ncnn-vulkan.exe" : "realcugan-ncnn-vulkan",
-    installCandidates: ["managed:realCugan"],
-    reason: "realcugan-ncnn-vulkan not detected"
-  },
-  {
-    key: "waifu2x",
-    label: "waifu2x",
-    probes: WAIFU2X_COMMANDS.map((command) => ({ command, args: ["-h"] })),
-    managedExecutable: process.platform === "win32" ? "waifu2x-ncnn-vulkan.exe" : "waifu2x-ncnn-vulkan",
-    installCandidates: ["managed:waifu2x"],
-    reason: "waifu2x-ncnn-vulkan not detected"
-  },
-  {
-    key: "upscaleRouterModel",
-    label: "Stout Model",
-    probes: [],
-    managedAsset: "model_quantized.onnx",
-    managedVersion: "Xenova/resnet-18 quantized",
-    installCandidates: ["managed:resnet18Classifier"],
-    reason: "Stout backbone not detected"
   },
   {
     key: "lzma2Offline",
@@ -74,8 +36,8 @@ const AUTO_INSTALL_TOOLS = [...INSTALLABLE_TOOLS].filter(
   (tool) => Array.isArray(tool.installCandidates) && tool.installCandidates.length
 );
 
-function isToolAutoInstallSupported(tool) {
-  return Boolean(tool?.key) && ["darwin", "win32"].includes(process.platform);
+function isToolAutoInstallSupported() {
+  return ["darwin", "win32"].includes(process.platform);
 }
 
 function getPathDelimiter() {
@@ -211,24 +173,6 @@ function managedExecutablePath(tool, options = {}) {
     return null;
   }
   return path.join(packageDir, tool.managedExecutable);
-}
-
-function managedAssetPath(tool, options = {}) {
-  if (!tool?.managedAsset) {
-    return null;
-  }
-  const packageDir = managedPackageDir(tool.key, options);
-  if (!packageDir) {
-    return null;
-  }
-  return path.join(packageDir, tool.managedAsset);
-}
-
-function bundledAssetPath(tool) {
-  if (tool?.key === "upscaleRouterModel") {
-    return BUNDLED_UPSCALE_ROUTER_MODEL_PATH;
-  }
-  return null;
 }
 
 async function ensureDir(dirPath) {
@@ -430,112 +374,10 @@ async function installManagedCjxl(options = {}) {
   return `installed JPEG XL (${release.tag_name})`;
 }
 
-async function installManagedBundledNcnnTool({ name, repo, executableName, assetPatternsByPlatform }, options = {}) {
-  const release = await fetchLatestRelease(repo);
-  const asset = pickAsset(release, assetPatternsByPlatform);
-
-  if (!asset?.browser_download_url) {
-    throw new Error(`No matching ${name} release asset found for this platform`);
-  }
-
-  const targetRoot = managedPackageDir(name, options);
-  if (!targetRoot) {
-    throw new Error(`Cannot determine install directory for ${name}`);
-  }
-
-  await withTempDir(`stow-${name}-`, async (tempDir) => {
-    const archivePath = path.join(tempDir, asset.name);
-    const extractDir = path.join(tempDir, "extract");
-    await downloadToFile(asset.browser_download_url, archivePath);
-    await extractZip(archivePath, extractDir, options);
-
-    const binaryPath = await findFileRecursive(extractDir, (entryName) => entryName.toLowerCase() === executableName.toLowerCase());
-    if (!binaryPath) {
-      throw new Error(`${executableName} not found in ${asset.name}`);
-    }
-
-    const extractedRoot = path.dirname(binaryPath);
-    await fs.rm(targetRoot, { recursive: true, force: true });
-    await ensureDir(path.dirname(targetRoot));
-    await fs.cp(extractedRoot, targetRoot, { recursive: true });
-
-    if (process.platform !== "win32") {
-      await fs.chmod(path.join(targetRoot, executableName), 0o755);
-    }
-  });
-
-  return `installed ${name} (${release.tag_name})`;
-}
-
-async function installManagedRealEsrgan(options = {}) {
-  return installManagedBundledNcnnTool(
-    {
-      name: "realEsrgan",
-      repo: "xinntao/Real-ESRGAN-ncnn-vulkan",
-      executableName: process.platform === "win32" ? "realesrgan-ncnn-vulkan.exe" : "realesrgan-ncnn-vulkan",
-      assetPatternsByPlatform: {
-        darwin: [/-macos\.zip$/i],
-        win32: [/-windows\.zip$/i]
-      }
-    },
-    options
-  );
-}
-
-async function installManagedRealCugan(options = {}) {
-  return installManagedBundledNcnnTool(
-    {
-      name: "realCugan",
-      repo: "nihui/realcugan-ncnn-vulkan",
-      executableName: process.platform === "win32" ? "realcugan-ncnn-vulkan.exe" : "realcugan-ncnn-vulkan",
-      assetPatternsByPlatform: {
-        darwin: [/-macos\.zip$/i],
-        win32: [/-windows\.zip$/i]
-      }
-    },
-    options
-  );
-}
-
-async function installManagedWaifu2x(options = {}) {
-  return installManagedBundledNcnnTool(
-    {
-      name: "waifu2x",
-      repo: "nihui/waifu2x-ncnn-vulkan",
-      executableName: process.platform === "win32" ? "waifu2x-ncnn-vulkan.exe" : "waifu2x-ncnn-vulkan",
-      assetPatternsByPlatform: {
-        darwin: [/-macos\.zip$/i],
-        win32: [/-windows\.zip$/i]
-      }
-    },
-    options
-  );
-}
-
-async function installManagedResnet18Classifier(options = {}) {
-  const targetRoot = managedPackageDir("upscaleRouterModel", options);
-  if (!targetRoot) {
-    throw new Error("Cannot determine install directory for the Stout model");
-  }
-
-  await ensureDir(targetRoot);
-  const targetPath = path.join(targetRoot, "model_quantized.onnx");
-  if (await pathExists(BUNDLED_UPSCALE_ROUTER_MODEL_PATH)) {
-    await fs.copyFile(BUNDLED_UPSCALE_ROUTER_MODEL_PATH, targetPath);
-    return "installed Stout backbone from bundled asset";
-  }
-  await downloadToFile("https://huggingface.co/Xenova/resnet-18/resolve/main/onnx/model_quantized.onnx", targetPath);
-  return "installed Stout backbone (Xenova/resnet-18 quantized)";
-}
-
 async function installManagedTool(name, options = {}) {
   const installers = {
     zstd: installManagedZstd,
-    cjxl: installManagedCjxl,
-    realEsrgan: installManagedRealEsrgan,
-    realCugan: installManagedRealCugan,
-    waifu2x: installManagedWaifu2x,
-    resnet18Classifier: installManagedResnet18Classifier
+    cjxl: installManagedCjxl
   };
 
   const installer = installers[name];
@@ -701,14 +543,6 @@ function publishInstallState(onProgress, installStatus) {
 }
 
 async function probeManagedTool(tool, options = {}) {
-  const bundledPath = bundledAssetPath(tool);
-  if (bundledPath && (await pathExists(bundledPath))) {
-    return {
-      summary: `${tool.managedVersion || path.basename(bundledPath)} (bundled)`,
-      command: bundledPath
-    };
-  }
-
   const executablePath = managedExecutablePath(tool, options);
   if (executablePath && (await pathExists(executablePath))) {
     const summary = await runCommandSummary(executablePath, ["-h"], {
@@ -725,19 +559,7 @@ async function probeManagedTool(tool, options = {}) {
     };
   }
 
-  const assetPath = managedAssetPath(tool, options);
-  if (assetPath && (await pathExists(assetPath))) {
-    return {
-      summary: tool.managedVersion || path.basename(assetPath),
-      command: assetPath
-    };
-  }
-
   return null;
-}
-
-function isUpscalerTool(tool) {
-  return ["realEsrgan", "realCugan", "waifu2x", "upscaleRouterModel"].includes(tool?.key);
 }
 
 async function detectTooling(options = {}) {
@@ -800,12 +622,7 @@ async function ensureRuntimeTools(options = {}) {
   }
 
   const current = await detectTooling(installOptions);
-  const installPlan = AUTO_INSTALL_TOOLS.filter(
-    (tool) =>
-      !current[tool.key]?.available &&
-      isToolAutoInstallSupported(tool) &&
-      (options.enableUpscaling !== false || !isUpscalerTool(tool))
-  );
+  const installPlan = AUTO_INSTALL_TOOLS.filter((tool) => !current[tool.key]?.available && isToolAutoInstallSupported(tool));
 
   if (!installPlan.length) {
     installStatus.active = false;
@@ -822,40 +639,40 @@ async function ensureRuntimeTools(options = {}) {
 
   installStatus.phase = "installing";
   installStatus.totalSteps = installPlan.length;
-  installStatus.completedSteps = 0;
-  installStatus.currentTarget = installPlan[0].label;
-  installStatus.message = `Installing ${installPlan[0].label}`;
+  installStatus.currentTarget = installPlan[0]?.label || null;
   publishInstallState(onProgress, installStatus);
 
   const installed = [];
   const skipped = [];
-
-  for (const tool of installPlan) {
+  for (let index = 0; index < installPlan.length; index += 1) {
+    const tool = installPlan[index];
     installStatus.currentTarget = tool.label;
-    installStatus.message = `Installing ${tool.label} (${installStatus.completedSteps + 1}/${installStatus.totalSteps})`;
+    installStatus.completedSteps = index;
     publishInstallState(onProgress, installStatus);
 
-    const result = await installFirstAvailableFormula(tool, installOptions);
-    if (result.ok) {
-      installed.push(result.message);
-      installStatus.installed = [...installed];
-    } else {
-      skipped.push(result.message);
-      installStatus.skipped = [...skipped];
+    try {
+      const result = await installFirstAvailableFormula(tool, installOptions);
+      if (result.ok) {
+        installed.push(result.message);
+      } else {
+        skipped.push(result.message);
+      }
+    } catch (error) {
+      skipped.push(`${tool.label}: ${error instanceof Error ? error.message : String(error)}`);
     }
-
-    installStatus.completedSteps += 1;
-    publishInstallState(onProgress, installStatus);
   }
 
-  installStatus.active = false;
+  installStatus.completedSteps = installPlan.length;
   installStatus.phase = "complete";
+  installStatus.active = false;
   installStatus.currentTarget = null;
-  installStatus.message = skipped.length ? "Tooling install finished with warnings" : "Local tooling is ready";
+  installStatus.message = installed.length || skipped.length ? "Local tooling install finished" : "Local tooling is ready";
+  installStatus.installed = installed;
+  installStatus.skipped = skipped;
   publishInstallState(onProgress, installStatus);
 
   return {
-    attempted: installPlan.length > 0,
+    attempted: true,
     installed,
     skipped
   };

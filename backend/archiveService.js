@@ -14,7 +14,7 @@ const {
   saveRootCatalog,
   writeEntryCatalog
 } = require("./catalogStore");
-const { UPSCALE_ROUTES, analyzePath, classifyPath, generatePreviewFile, inspectManualRoutingRequirement } = require("./mediaTools");
+const { analyzePath, classifyPath, generatePreviewFile } = require("./mediaTools");
 const { ObjectStore } = require("./objectStore");
 const { PreviewCache } = require("./previewCache");
 
@@ -43,10 +43,6 @@ async function isDirectory(dirPath) {
 
 async function writeJson(filePath, value) {
   await fs.writeFile(filePath, JSON.stringify(value, null, 2));
-}
-
-async function appendJsonLine(filePath, value) {
-  await fs.appendFile(filePath, `${JSON.stringify(value)}\n`);
 }
 
 async function* walkInputPath(inputPath, relativePrefix = path.basename(inputPath)) {
@@ -225,18 +221,6 @@ function buildEntryDetail(entry) {
   };
 }
 
-function buildManualRoutingRequestItem(file, requirement) {
-  return {
-    absolutePath: file.absolutePath,
-    relativePath: file.relativePath,
-    mediaType: requirement.mediaType,
-    failureCode: requirement.failureCode,
-    reason: requirement.message,
-    suggestedRoute: requirement.suggestedRoute ?? null,
-    choices: UPSCALE_ROUTES
-  };
-}
-
 class ArchiveService {
   constructor(state, emitters) {
     this.state = state;
@@ -253,7 +237,6 @@ class ArchiveService {
   async initialize() {
     await ensureDir(this.state.runtimeTempPath);
     await this.previewCache.initialize();
-    await ensureDir(this.state.upscaleRouterFeedbackSamplesPath);
     await this.cleanupOpenTempArtifacts();
   }
 
@@ -309,47 +292,6 @@ class ArchiveService {
     if (this.state.archiveSession) {
       this.state.archiveSession.root.logs.push(stamped);
       this.state.archiveSession.root.logs = this.state.archiveSession.root.logs.slice(-200);
-    }
-  }
-
-  async recordManualRouteFeedback(files, manualRoutes) {
-    if (!this.state.upscaleRouterFeedbackPath || !this.state.upscaleRouterFeedbackSamplesPath) {
-      return;
-    }
-
-    const selectedFiles = files.filter((file) => manualRoutes[file.absolutePath]);
-    if (!selectedFiles.length) {
-      return;
-    }
-
-    for (const file of selectedFiles) {
-      const route = manualRoutes[file.absolutePath];
-      const mediaType = classifyPath(file.absolutePath);
-      if (mediaType !== "image" && mediaType !== "video") {
-        continue;
-      }
-
-      try {
-        const sampleId = uuid();
-        const sampleDir = path.join(this.state.upscaleRouterFeedbackSamplesPath, sampleId);
-        await ensureDir(sampleDir);
-        const preview = await generatePreviewFile(file.absolutePath, mediaType, "preview", sampleDir);
-        if (!preview?.path) {
-          continue;
-        }
-
-        await appendJsonLine(this.state.upscaleRouterFeedbackPath, {
-          recordedAt: new Date().toISOString(),
-          sourcePath: file.absolutePath,
-          relativePath: file.relativePath,
-          mediaType,
-          route,
-          samplePath: preview.path,
-          sampleMime: preview.mime
-        });
-      } catch (error) {
-        this.pushLog(`failed to record upscale router feedback for ${file.relativePath}: ${error instanceof Error ? error.message : String(error)}`);
-      }
     }
   }
 
@@ -742,7 +684,7 @@ class ArchiveService {
     await this.lockArchive("manually locked archive session");
   }
 
-  async addPaths(paths, manualRoutes = {}) {
+  async addPaths(paths) {
     this.requireArchiveSession();
     this.beginSessionOperation();
     try {
@@ -750,11 +692,9 @@ class ArchiveService {
       let completedFiles = 0;
       let ingestedAny = false;
       const uploadedSourcePaths = new Set();
-      const normalizedManualRoutes = manualRoutes && typeof manualRoutes === "object" ? manualRoutes : {};
       const inputFiles = await collectInputFiles(paths);
-      await this.recordManualRouteFeedback(inputFiles, normalizedManualRoutes);
 
-      const ingestResult = await withTempDir("stow-ingest-", async (tempDir) => {
+      await withTempDir("stow-ingest-", async (tempDir) => {
         this.emitProgress({
           active: true,
           phase: "preparing",
@@ -762,35 +702,6 @@ class ArchiveService {
           completedFiles: 0,
           totalFiles: null
         });
-
-        const manualRoutingItems = [];
-        for (const file of inputFiles) {
-          const requirement = await inspectManualRoutingRequirement(
-            file.absolutePath,
-            session.root.preferences,
-            this.state.capabilities,
-            tempDir,
-            normalizedManualRoutes[file.absolutePath] ?? null
-          );
-          if (requirement) {
-            manualRoutingItems.push(buildManualRoutingRequestItem(file, requirement));
-          }
-        }
-
-        if (manualRoutingItems.length) {
-          this.emitProgress({
-            active: false,
-            phase: "processing",
-            currentFile: null,
-            completedFiles: 0,
-            totalFiles: inputFiles.length
-          });
-          return {
-            manualRoutingRequest: {
-              items: manualRoutingItems
-            }
-          };
-        }
 
         for (const file of inputFiles) {
           ingestedAny = true;
@@ -808,15 +719,10 @@ class ArchiveService {
             relativePath: file.relativePath,
             tempDir,
             existingEntryId: null,
-            overrideMode: null,
-            manualRoute: normalizedManualRoutes[file.absolutePath] ?? null
+            overrideMode: null
           });
           completedFiles += 1;
         }
-
-        return {
-          manualRoutingRequest: null
-        };
       });
 
       this.emitProgress({
@@ -827,14 +733,8 @@ class ArchiveService {
         totalFiles: completedFiles
       });
 
-      if (ingestResult?.manualRoutingRequest) {
-        return ingestResult;
-      }
-
       if (!ingestedAny) {
-        return {
-          manualRoutingRequest: null
-        };
+        return;
       }
 
       await this.persistRoot();
@@ -846,9 +746,6 @@ class ArchiveService {
         reason: "ingest",
         selectedEntryId: session.root.entryOrder[0] || null
       });
-      return {
-        manualRoutingRequest: null
-      };
     } finally {
       this.endSessionOperation();
     }
@@ -892,16 +789,14 @@ class ArchiveService {
     return [dedupeAction, compressionAction];
   }
 
-  async ingestSource({ absolutePath, relativePath, tempDir, existingEntryId, overrideMode, manualRoute = null }) {
+  async ingestSource({ absolutePath, relativePath, tempDir, existingEntryId, overrideMode }) {
     const session = this.requireArchiveSession();
     const entryId = existingEntryId || uuid();
     const preferences = {
       ...session.root.preferences,
       ...(overrideMode ? { optimizationMode: overrideMode } : {})
     };
-    const analysis = await analyzePath(absolutePath, preferences, this.state.capabilities, tempDir, {
-      manualRoute
-    });
+    const analysis = await analyzePath(absolutePath, preferences, this.state.capabilities, tempDir);
     const stats = await fs.stat(absolutePath);
     const revisionId = uuid();
 
@@ -940,7 +835,6 @@ class ArchiveService {
         codec: analysis.original.codec || null
       },
       overrideMode: overrideMode || null,
-      routing: analysis.routing ?? null,
       summary: analysis.summary,
       actions: [
         overrideMode ? `per-file override ${overrideMode}` : "used archive defaults",
@@ -1139,7 +1033,7 @@ class ArchiveService {
     }
   }
 
-  async reprocessEntry(entryId, overrideMode, routeOverride = null) {
+  async reprocessEntry(entryId, overrideMode) {
     this.requireArchiveSession();
     this.beginSessionOperation();
     try {
@@ -1152,18 +1046,6 @@ class ArchiveService {
       if (!sourcePath || !(await exists(sourcePath))) {
         throw new Error("Original source path is not available for reprocessing");
       }
-      if (routeOverride) {
-        await this.recordManualRouteFeedback(
-          [
-            {
-              absolutePath: sourcePath,
-              relativePath: entry.relativePath,
-              size: entry.size
-            }
-          ],
-          { [sourcePath]: routeOverride }
-        );
-      }
 
       await withTempDir("stow-reprocess-", async (tempDir) => {
         await this.ingestSource({
@@ -1171,8 +1053,7 @@ class ArchiveService {
           relativePath: entry.relativePath,
           tempDir,
           existingEntryId: entry.id,
-          overrideMode,
-          manualRoute: routeOverride
+          overrideMode
         });
       });
       await this.persistRoot();

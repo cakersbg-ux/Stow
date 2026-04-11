@@ -10,11 +10,7 @@
     "build": "tauri build",
     "build:web": "vite build",
     "bench:backend": "node backend/benchmarks.js",
-    "test:backend": "node --test backend/**/*.test.js training/**/*.test.js",
-    "dataset:upscale-router": "node training/upscale-classifier/curateDataset.js",
-    "train:upscale-router": "node training/upscale-classifier/trainDistilledModel.js",
-    "bench:upscale-router": "node training/upscale-classifier/benchmarkDistilled.js",
-    "prune:upscale-router": "node training/upscale-classifier/pruneCache.js"
+    "test:backend": "node --test backend/**/*.test.js"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.12",
@@ -24,7 +20,6 @@
     "hash-wasm": "^4.12.0",
     "libsodium-wrappers-sumo": "^0.7.15",
     "mime-types": "^3.0.1",
-    "onnxruntime-node": "^1.23.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "sharp": "^0.34.3",

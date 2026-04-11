@@ -35,10 +35,6 @@ Update this section whenever an agent learns something durable about how this re
 - `npm run build:web` builds only the frontend bundle.
 - `npm run test:backend` runs the Node test suite in `backend/`.
 - `npm run bench:backend` runs backend benchmarks.
-- `npm run dataset:upscale-router` curates the upscale-router dataset.
-- `npm run train:upscale-router` trains the distilled upscale-router model.
-- `npm run bench:upscale-router` benchmarks the shipped Stout route model on the held-out split.
-- `npm run prune:upscale-router` removes stale cached training assets under `training-cache/upscale-classifier`.
 
 ### Notes
 
@@ -46,6 +42,4 @@ Update this section whenever an agent learns something durable about how this re
 - Use `apply_patch` for manual file edits.
 - Keep generated output and build artifacts out of version control unless there is a strong reason otherwise.
 - The repo currently includes a `README.md` deletion in the working tree; do not assume it is part of this task.
-- Managed NCNN upscalers on macOS can be cwd-sensitive, so launch them from their install directory when probing or running them.
-- Stout v3 is route-centric (`photo_gentle`, `photo_general`, `art_clean`, `art_anime`, `text_ui`) and uses explicit train/validation/benchmark manifests under `training/upscale-classifier/`.
-- Runtime auto-routing is now conservative: Stout must clear validation-derived confidence and margin thresholds before Stow will apply a route automatically.
+- There is no upscaling-specific ML workflow in this repository anymore.

@@ -539,19 +539,6 @@ h2 {
   letter-spacing: 0.08em;
 }
 
-.entry-override-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1px 6px;
-  border-radius: 999px;
-  border: 1px solid rgba(167, 139, 250, 0.25);
-  background: rgba(167, 139, 250, 0.10);
-  color: #c4b5fd;
-  font-size: 10px;
-  font-weight: 600;
-}
-
 .entry-list-empty {
   padding: 32px 20px;
   border: 1px dashed var(--border-strong);
@@ -902,101 +889,6 @@ h2 {
 .archive-delete-warning {
   display: grid;
   gap: 4px;
-}
-
-/* ─── Manual routing dialog ──────────────────────────── */
-.manual-routing-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 1250;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  animation: overlay-in var(--transition-smooth);
-}
-
-.manual-routing-dialog {
-  width: min(860px, 100%);
-  max-height: min(88vh, 960px);
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--surface-2);
-  box-shadow: var(--shadow-dialog);
-  animation: dialog-in var(--transition-smooth);
-}
-
-.manual-routing-header,
-.manual-routing-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 18px 20px;
-}
-
-.manual-routing-header {
-  border-bottom: 1px solid var(--border-default);
-}
-
-.manual-routing-header h2 {
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.manual-routing-footer {
-  border-top: 1px solid var(--border-default);
-  align-items: center;
-}
-
-.manual-routing-body {
-  overflow: auto;
-  padding: 18px 20px 20px;
-  display: grid;
-  gap: 14px;
-}
-
-.manual-routing-kicker {
-  margin-bottom: 6px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.manual-routing-list {
-  display: grid;
-  gap: 12px;
-}
-
-.manual-routing-card {
-  display: grid;
-  gap: 10px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  background: var(--surface-1);
-  padding: 14px;
-}
-
-.manual-routing-card-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: baseline;
-}
-
-.manual-routing-card strong,
-.manual-routing-card span {
-  overflow-wrap: anywhere;
-}
-
-.manual-routing-type {
-  text-transform: capitalize;
-  color: var(--text-secondary);
-  font-size: 12px;
 }
 
 /* ─── Settings dialog ────────────────────────────────── */
