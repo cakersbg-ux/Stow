@@ -23,3 +23,8 @@ Thumbs.db
 .vscode/
 
 training-cache/
+
+# Bundled runtime staged during release packaging
+src-tauri/resources/node-runtime/node
+src-tauri/resources/node-runtime/node.exe
+src-tauri/resources/node-runtime/runtime-metadata.json

@@ -3,10 +3,11 @@ const path = require("node:path");
 const readline = require("node:readline");
 const { ArchiveService } = require("./archiveService");
 const { collectDetectedArchives, createInitialState, sanitizeShellState } = require("./appState");
-const { createInstallStatus, detectTooling, ensureRuntimeTools } = require("./tooling");
+const { createInstallStatus, detectTooling, installMissingRuntimeTools } = require("./tooling");
 
 let state;
 let archiveService;
+let backendReady = Promise.resolve();
 
 function prependToProcessPath(paths) {
   const delimiter = process.platform === "win32" ? ";" : ":";
@@ -77,38 +78,30 @@ function emitEntriesInvalidated(payload) {
   sendEvent("archive:entries-invalidated", payload);
 }
 
-function appendToolingLogs(installResult) {
-  if (!installResult.installed.length && !installResult.skipped.length) {
-    return;
-  }
-
-  state.logs.push(...installResult.installed.map((message) => `tooling: ${message}`));
-  state.logs.push(...installResult.skipped.map((message) => `tooling: ${message}`));
-}
-
-async function runRuntimeToolSetup() {
+async function runRuntimeToolDetection() {
   const toolsDir = path.join(state.userDataPath, "tools");
 
   state.installStatus = createInstallStatus();
   emitShellStateUpdate();
 
   try {
-    const installResult = await ensureRuntimeTools({
-      toolsDir,
-      onProgress: (installStatus) => {
-        state.installStatus = installStatus;
-        emitShellStateUpdate();
-      }
-    });
-
     state.capabilities = await detectTooling({ toolsDir });
-    appendToolingLogs(installResult);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Automatic tooling install failed";
     state.installStatus = createInstallStatus({
       active: false,
       phase: "complete",
-      message: "Tooling install failed",
+      message: "Local tooling detection complete",
+      currentTarget: null,
+      completedSteps: 1,
+      totalSteps: 1,
+      installed: [],
+      skipped: []
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Tooling detection failed";
+    state.installStatus = createInstallStatus({
+      active: false,
+      phase: "complete",
+      message: "Tooling detection failed",
       completedSteps: 1,
       skipped: [message]
     });
@@ -129,10 +122,8 @@ async function bootstrap() {
   });
   await archiveService.initialize();
   emitShellStateUpdate();
-  void runRuntimeToolSetup();
+  void runRuntimeToolDetection();
 }
-
-const backendReady = bootstrap();
 
 async function ensureBackend() {
   await backendReady;
@@ -140,9 +131,6 @@ async function ensureBackend() {
 
 async function ensureInteractive() {
   await ensureBackend();
-  if (state.installStatus.active) {
-    throw new Error("Tooling setup is still running");
-  }
 }
 
 async function handleCommand(method, payload) {
@@ -195,6 +183,12 @@ async function handleCommand(method, payload) {
       emitShellStateUpdate();
       return sanitizeShellState(state);
 
+    case "archive:set-preferences":
+      await ensureInteractive();
+      await archiveService.setArchivePreferences(payload || {});
+      emitShellStateUpdate();
+      return sanitizeShellState(state);
+
     case "archives:remove":
       await ensureInteractive();
       await archiveService.removeRecentArchive(payload.archivePath);
@@ -209,12 +203,47 @@ async function handleCommand(method, payload) {
 
     case "archives:list-detected":
       await ensureBackend();
-      return collectDetectedArchives(state.homeDir);
+      return collectDetectedArchives(resolveDetectedArchiveScanRoot(state));
+
+    case "runtime:install-missing-tools": {
+      await ensureInteractive();
+      const toolsDir = path.join(state.userDataPath, "tools");
+      let latestInstallStatus = createInstallStatus();
+
+      try {
+        await installMissingRuntimeTools({
+          toolsDir,
+          onProgress: (installStatus) => {
+            latestInstallStatus = createInstallStatus(installStatus);
+            state.installStatus = latestInstallStatus;
+            emitShellStateUpdate();
+          }
+        });
+
+        state.capabilities = await detectTooling({ toolsDir });
+        state.installStatus = latestInstallStatus;
+        emitShellStateUpdate();
+        return sanitizeShellState(state);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Tooling install failed";
+        state.installStatus = createInstallStatus({
+          active: false,
+          phase: "complete",
+          message: "Tooling install failed",
+          completedSteps: 1,
+          skipped: [message]
+        });
+        emitShellStateUpdate();
+        throw error;
+      }
+    }
 
     case "archive:add-paths":
       await ensureInteractive();
       {
-        await archiveService.addPaths(payload.paths || []);
+        await archiveService.addPaths(payload.paths || [], {
+          destinationDirectory: payload.destinationDirectory
+        });
         emitShellStateUpdate();
         return sanitizeShellState(state);
       }
@@ -231,9 +260,45 @@ async function handleCommand(method, payload) {
       emitShellStateUpdate();
       return sanitizeShellState(state);
 
+    case "archive:delete-folder":
+      await ensureInteractive();
+      await archiveService.deleteFolder(payload.relativePath);
+      emitShellStateUpdate();
+      return sanitizeShellState(state);
+
     case "archive:rename-entry":
       await ensureInteractive();
       await archiveService.renameEntry(payload.entryId, payload.name);
+      emitShellStateUpdate();
+      return sanitizeShellState(state);
+
+    case "archive:create-folder":
+      await ensureInteractive();
+      await archiveService.createFolder(payload.relativePath);
+      emitShellStateUpdate();
+      return sanitizeShellState(state);
+
+    case "archive:move-entry":
+      await ensureInteractive();
+      await archiveService.moveEntry(payload.entryId, payload.destinationDirectory);
+      emitShellStateUpdate();
+      return sanitizeShellState(state);
+
+    case "archive:delete-entries":
+      await ensureInteractive();
+      await archiveService.deleteEntries(payload.entryIds || []);
+      emitShellStateUpdate();
+      return sanitizeShellState(state);
+
+    case "archive:move-entries":
+      await ensureInteractive();
+      await archiveService.moveEntries(payload.entryIds || [], payload.destinationDirectory);
+      emitShellStateUpdate();
+      return sanitizeShellState(state);
+
+    case "archive:export-entries":
+      await ensureInteractive();
+      await archiveService.exportEntries(payload.entryIds || [], payload.variant, payload.destination);
       emitShellStateUpdate();
       return sanitizeShellState(state);
 
@@ -270,12 +335,11 @@ async function handleCommand(method, payload) {
   }
 }
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  terminal: false
-});
-
 let mutationQueue = Promise.resolve();
+
+function resolveDetectedArchiveScanRoot(currentState) {
+  return currentState?.settings?.preferredArchiveRoot || currentState?.defaultArchiveRoot || currentState?.homeDir;
+}
 
 function isImmediateMethod(method) {
   return (
@@ -317,25 +381,38 @@ function handleRequest(request) {
     });
 }
 
-rl.on("line", (line) => {
-  if (!line.trim()) {
-    return;
-  }
+if (require.main === module) {
+  backendReady = bootstrap();
 
-  let request;
-  try {
-    request = JSON.parse(line);
-  } catch (_error) {
-    return;
-  }
+  const rl = readline.createInterface({
+    input: process.stdin,
+    terminal: false
+  });
 
-  handleRequest(request);
-});
+  rl.on("line", (line) => {
+    if (!line.trim()) {
+      return;
+    }
 
-process.on("SIGTERM", () => {
-  process.exit(0);
-});
+    let request;
+    try {
+      request = JSON.parse(line);
+    } catch (_error) {
+      return;
+    }
 
-process.on("SIGINT", () => {
-  process.exit(0);
-});
+    handleRequest(request);
+  });
+
+  process.on("SIGTERM", () => {
+    process.exit(0);
+  });
+
+  process.on("SIGINT", () => {
+    process.exit(0);
+  });
+}
+
+module.exports = {
+  resolveDetectedArchiveScanRoot
+};

@@ -1,11 +1,13 @@
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const https = require("node:https");
 const { spawn } = require("node:child_process");
-const ffmpegStatic = require("ffmpeg-static");
-const ffprobeStatic = require("ffprobe-static");
 const { detectAv1Encoder } = require("./mediaTools");
+
+const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+const DEFAULT_INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 
 const INSTALLABLE_TOOLS = [
   {
@@ -19,6 +21,11 @@ const INSTALLABLE_TOOLS = [
     label: "JPEG XL",
     probes: [{ command: "cjxl", args: ["--version"] }],
     installCandidates: ["brew:jpeg-xl", "managed:cjxl"]
+  },
+  {
+    key: "djxl",
+    label: "JPEG XL Decoder",
+    probes: [{ command: "djxl", args: ["--version"] }]
   },
   {
     key: "lzma2Offline",
@@ -35,6 +42,70 @@ const INSTALLABLE_TOOLS = [
 const AUTO_INSTALL_TOOLS = [...INSTALLABLE_TOOLS].filter(
   (tool) => Array.isArray(tool.installCandidates) && tool.installCandidates.length
 );
+
+const MANAGED_RELEASES = {
+  zstd: {
+    repo: "facebook/zstd",
+    tag: "v1.5.7",
+    version: "1.5.7",
+    assetName: "zstd-v1.5.7-win64.zip"
+  },
+  cjxl: {
+    repo: "libjxl/libjxl",
+    tag: "v0.11.2",
+    version: "0.11.2",
+    assetName: "jxl-x64-windows-static.zip"
+  }
+};
+
+let ffmpegStaticPath = null;
+let ffmpegStaticLoaded = false;
+let ffprobeStatic = null;
+let ffprobeStaticLoaded = false;
+
+function loadOptionalModule(moduleName) {
+  try {
+    return require(moduleName);
+  } catch (error) {
+    if (error instanceof Error && error.code === "MODULE_NOT_FOUND" && error.message.includes(`'${moduleName}'`)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function getFfmpegStaticPath() {
+  if (!ffmpegStaticLoaded) {
+    ffmpegStaticPath = loadOptionalModule("ffmpeg-static");
+    ffmpegStaticLoaded = true;
+  }
+  return ffmpegStaticPath;
+}
+
+function getFfprobeStatic() {
+  if (!ffprobeStaticLoaded) {
+    ffprobeStatic = loadOptionalModule("ffprobe-static");
+    ffprobeStaticLoaded = true;
+  }
+  return ffprobeStatic;
+}
+
+function getManagedReleaseSpec(name) {
+  return MANAGED_RELEASES[name] || null;
+}
+
+function normalizeTimeoutMs(timeoutMs) {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return null;
+  }
+
+  return Math.floor(timeoutMs);
+}
+
+function withTimeout(options = {}, timeoutMs) {
+  const normalizedTimeoutMs = normalizeTimeoutMs(timeoutMs);
+  return normalizedTimeoutMs ? { ...options, timeoutMs: normalizedTimeoutMs } : { ...options };
+}
 
 function isToolAutoInstallSupported() {
   return ["darwin", "win32"].includes(process.platform);
@@ -63,35 +134,138 @@ function makeSpawnOptions(options = {}) {
   };
 }
 
+function normalizeDigest(digest) {
+  if (typeof digest !== "string") {
+    return null;
+  }
+
+  const normalized = digest.trim().toLowerCase();
+  if (/^[a-f0-9]{64}$/.test(normalized)) {
+    return `sha256:${normalized}`;
+  }
+
+  if (/^sha256:[a-f0-9]{64}$/.test(normalized)) {
+    return normalized;
+  }
+
+  return null;
+}
+
+function sha256Hex(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+function verifyDigest(buffer, expectedDigest, assetName) {
+  const normalizedExpectedDigest = normalizeDigest(expectedDigest);
+  if (!normalizedExpectedDigest) {
+    return;
+  }
+
+  const actualDigest = `sha256:${sha256Hex(buffer)}`;
+  if (actualDigest !== normalizedExpectedDigest) {
+    throw new Error(
+      `Checksum mismatch for ${assetName}: expected ${normalizedExpectedDigest}, got ${actualDigest}`
+    );
+  }
+}
+
 async function runCommandDetailed(command, args = [], options = {}) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, makeSpawnOptions(options));
+    const spawnOptions = makeSpawnOptions(options);
+    const runner = typeof options.commandRunner === "function" ? options.commandRunner : spawn;
+    let child;
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    let timeoutId = null;
 
-    child.stdout.on("data", (chunk) => {
+    const settle = (result) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      resolve(result);
+    };
+
+    try {
+      child = runner(command, args, spawnOptions);
+    } catch (error) {
+      settle({
+        ok: false,
+        code: null,
+        stdout,
+        stderr: error instanceof Error ? error.message : String(error)
+      });
+      return;
+    }
+
+    child.stdout?.on?.("data", (chunk) => {
       stdout += chunk.toString();
     });
-    child.stderr.on("data", (chunk) => {
+    child.stderr?.on?.("data", (chunk) => {
       stderr += chunk.toString();
     });
-    child.on("error", (error) =>
-      resolve({
+    child.on?.("error", (error) =>
+      settle({
         ok: false,
         code: null,
         stdout,
         stderr: error.message || stderr
       })
     );
-    child.on("close", (code) =>
-      resolve({
+    child.on?.("close", (code) =>
+      settle({
         ok: code === 0,
         code,
         stdout,
         stderr
       })
     );
+
+    const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
+    if (timeoutMs) {
+      timeoutId = setTimeout(() => {
+        if (typeof child.kill === "function") {
+          try {
+            child.kill("SIGTERM");
+          } catch (_error) {
+            // Ignore termination errors; the timeout result is still authoritative.
+          }
+        }
+
+        const timeoutMessage = `${command} timed out after ${timeoutMs}ms`;
+        settle({
+          ok: false,
+          code: null,
+          stdout,
+          stderr: stderr ? `${stderr}\n${timeoutMessage}` : timeoutMessage
+        });
+      }, timeoutMs);
+    }
   });
+}
+
+async function verifyInstalledVersion(binaryPath, expectedVersion, options = {}) {
+  const summary = await runCommandSummary(binaryPath, ["--version"], {
+    ...options,
+    cwd: path.dirname(binaryPath)
+  });
+
+  if (!summary) {
+    throw new Error(`${path.basename(binaryPath)} did not report a version string`);
+  }
+
+  if (!summary.includes(expectedVersion)) {
+    throw new Error(
+      `${path.basename(binaryPath)} version mismatch: expected ${expectedVersion}, got ${summary}`
+    );
+  }
+
+  return summary;
 }
 
 async function runCommandSummary(command, args = [], options = {}) {
@@ -235,8 +409,10 @@ async function fetchJson(url) {
   return JSON.parse(buffer.toString("utf8"));
 }
 
-async function downloadToFile(url, filePath) {
-  const data = await fetchBuffer(url);
+async function downloadToFile(url, filePath, options = {}, expectedDigest = null) {
+  const fetchBufferImpl = typeof options.fetchBuffer === "function" ? options.fetchBuffer : fetchBuffer;
+  const data = await fetchBufferImpl(url);
+  verifyDigest(data, expectedDigest, path.basename(filePath));
   await ensureDir(path.dirname(filePath));
   await fs.writeFile(filePath, data);
 }
@@ -301,13 +477,20 @@ async function installExecutable({ sourcePath, targetPath }) {
   }
 }
 
-async function fetchLatestRelease(repo) {
-  return fetchJson(`https://api.github.com/repos/${repo}/releases/latest`);
+async function fetchReleaseByTag(repo, tag, options = {}) {
+  const fetchJsonImpl = typeof options.fetchJson === "function" ? options.fetchJson : fetchJson;
+  const release = await fetchJsonImpl(`https://api.github.com/repos/${repo}/releases/tags/${tag}`);
+
+  if (!release || release.tag_name !== tag) {
+    throw new Error(`Expected ${repo} release ${tag} but received ${release?.tag_name || "unknown"}`);
+  }
+
+  return release;
 }
 
-function pickAsset(release, patternsByPlatform) {
+function pickExactAsset(release, assetName) {
   const assets = Array.isArray(release.assets) ? release.assets : [];
-  return assets.find((asset) => platformAssetMatcher(asset.name || "", patternsByPlatform)) || null;
+  return assets.find((asset) => asset.name === assetName) || null;
 }
 
 async function installManagedZstd(options = {}) {
@@ -315,20 +498,19 @@ async function installManagedZstd(options = {}) {
     throw new Error("Managed zstd installer is currently only used on Windows");
   }
 
-  const release = await fetchLatestRelease("facebook/zstd");
-  const asset = pickAsset(release, {
-    win32: [/-win64\.zip$/i, /-win32\.zip$/i]
-  });
+  const spec = getManagedReleaseSpec("zstd");
+  const release = await fetchReleaseByTag(spec.repo, spec.tag, options);
+  const asset = pickExactAsset(release, spec.assetName);
 
   if (!asset?.browser_download_url) {
-    throw new Error("No matching zstd release asset found for this platform");
+    throw new Error(`No matching zstd release asset found for ${spec.tag}`);
   }
 
   const targetPath = path.join(managedBinDir(options), "zstd.exe");
   await withTempDir("stow-zstd-", async (tempDir) => {
     const archivePath = path.join(tempDir, asset.name);
     const extractDir = path.join(tempDir, "extract");
-    await downloadToFile(asset.browser_download_url, archivePath);
+    await downloadToFile(asset.browser_download_url, archivePath, options, asset.digest);
     await extractZip(archivePath, extractDir, options);
 
     const binaryPath = await findFileRecursive(extractDir, (name) => /^zstd\.exe$/i.test(name));
@@ -339,6 +521,8 @@ async function installManagedZstd(options = {}) {
     await installExecutable({ sourcePath: binaryPath, targetPath });
   });
 
+  await verifyInstalledVersion(targetPath, spec.version, options);
+
   return `installed zstd (${release.tag_name})`;
 }
 
@@ -347,31 +531,39 @@ async function installManagedCjxl(options = {}) {
     throw new Error("Managed JPEG XL installer is currently only used on Windows");
   }
 
-  const release = await fetchLatestRelease("libjxl/libjxl");
-  const asset = pickAsset(release, {
-    win32: [/jxl-x64-windows-static\.zip$/i, /jxl-x64-windows\.zip$/i]
-  });
+  const spec = getManagedReleaseSpec("cjxl");
+  const release = await fetchReleaseByTag(spec.repo, spec.tag, options);
+  const asset = pickExactAsset(release, spec.assetName);
 
   if (!asset?.browser_download_url) {
-    throw new Error("No matching JPEG XL release asset found for this platform");
+    throw new Error(`No matching JPEG XL release asset found for ${spec.tag}`);
   }
 
-  const targetPath = path.join(managedBinDir(options), "cjxl.exe");
+  const cjxlTargetPath = path.join(managedBinDir(options), "cjxl.exe");
+  const djxlTargetPath = path.join(managedBinDir(options), "djxl.exe");
   await withTempDir("stow-cjxl-", async (tempDir) => {
     const archivePath = path.join(tempDir, asset.name);
     const extractDir = path.join(tempDir, "extract");
-    await downloadToFile(asset.browser_download_url, archivePath);
+    await downloadToFile(asset.browser_download_url, archivePath, options, asset.digest);
     await extractZip(archivePath, extractDir, options);
 
-    const binaryPath = await findFileRecursive(extractDir, (name) => /^cjxl\.exe$/i.test(name));
-    if (!binaryPath) {
+    const cjxlBinaryPath = await findFileRecursive(extractDir, (name) => /^cjxl\.exe$/i.test(name));
+    const djxlBinaryPath = await findFileRecursive(extractDir, (name) => /^djxl\.exe$/i.test(name));
+    if (!cjxlBinaryPath) {
       throw new Error(`cjxl binary not found in ${asset.name}`);
     }
+    if (!djxlBinaryPath) {
+      throw new Error(`djxl binary not found in ${asset.name}`);
+    }
 
-    await installExecutable({ sourcePath: binaryPath, targetPath });
+    await installExecutable({ sourcePath: cjxlBinaryPath, targetPath: cjxlTargetPath });
+    await installExecutable({ sourcePath: djxlBinaryPath, targetPath: djxlTargetPath });
   });
 
-  return `installed JPEG XL (${release.tag_name})`;
+  await verifyInstalledVersion(cjxlTargetPath, spec.version, options);
+  await verifyInstalledVersion(djxlTargetPath, spec.version, options);
+
+  return `installed JPEG XL tools (${release.tag_name})`;
 }
 
 async function installManagedTool(name, options = {}) {
@@ -410,20 +602,21 @@ function normalizeInstallCandidate(candidate) {
     return { type: "cask", name: candidate.slice("cask:".length) };
   }
 
-  return { type: "brew", name: candidate };
+  return null;
 }
 
-function candidateAppliesToPlatform(candidate) {
-  if (candidate.type === "brew" || candidate.type === "cask") {
-    return process.platform === "darwin";
-  }
-  if (candidate.type === "winget") {
-    return process.platform === "win32";
-  }
-  if (candidate.type === "managed") {
-    return ["darwin", "win32"].includes(process.platform);
-  }
-  return false;
+function candidateIsTrustedAutomaticInstall(candidate) {
+  return candidate?.type === "managed" && process.platform === "win32";
+}
+
+function describeInstallCandidate(candidate) {
+  return `${candidate.type}:${candidate.name}`;
+}
+
+function describeBlockedInstallCandidates(tool, blockedCandidates) {
+  const blockedList = blockedCandidates.map(describeInstallCandidate).join(", ");
+  const platformLabel = process.platform === "win32" ? "Windows" : process.platform;
+  return `automatic installation for ${tool.label} is disabled on ${platformLabel}; ${blockedList} require manual installation and are not part of the trusted automatic path`;
 }
 
 async function installBrewPackage(formula, options = {}) {
@@ -503,6 +696,7 @@ async function installCandidate(candidate, options = {}) {
 
 async function installFirstAvailableFormula(tool, options = {}) {
   const errors = [];
+  const blockedCandidates = [];
   let attempted = 0;
 
   for (const rawCandidate of tool.installCandidates) {
@@ -510,7 +704,8 @@ async function installFirstAvailableFormula(tool, options = {}) {
     if (!candidate) {
       continue;
     }
-    if (!candidateAppliesToPlatform(candidate)) {
+    if (!candidateIsTrustedAutomaticInstall(candidate)) {
+      blockedCandidates.push(candidate);
       continue;
     }
 
@@ -524,9 +719,16 @@ async function installFirstAvailableFormula(tool, options = {}) {
   }
 
   if (!attempted) {
+    if (blockedCandidates.length) {
+      return {
+        ok: false,
+        message: describeBlockedInstallCandidates(tool, blockedCandidates)
+      };
+    }
+
     return {
       ok: false,
-      message: `no supported installers configured for ${tool.label} on ${process.platform}`
+      message: `no trusted installers configured for ${tool.label} on ${process.platform}`
     };
   }
 
@@ -565,10 +767,13 @@ async function probeManagedTool(tool, options = {}) {
 async function detectTooling(options = {}) {
   const results = {};
   const extraPaths = [managedBinDir(options)].filter(Boolean);
-  const probeOptions = { extraPaths };
+  const probeOptions = withTimeout(
+    { ...options, extraPaths },
+    normalizeTimeoutMs(options.probeTimeoutMs) || DEFAULT_PROBE_TIMEOUT_MS
+  );
 
   for (const tool of [...INSTALLABLE_TOOLS]) {
-    const detected = (await probeManagedTool(tool, options)) || (await probeTool(tool.probes, probeOptions));
+    const detected = (await probeManagedTool(tool, probeOptions)) || (await probeTool(tool.probes, probeOptions));
     results[tool.key] = {
       available: Boolean(detected),
       version: detected?.summary ?? null,
@@ -577,6 +782,8 @@ async function detectTooling(options = {}) {
     };
   }
 
+  const ffmpegStatic = getFfmpegStaticPath();
+  const ffprobeStatic = getFfprobeStatic();
   const ffmpeg = ffmpegStatic ? await runCommandSummary(ffmpegStatic, ["-version"], probeOptions) : null;
   const av1Encoder = await detectAv1Encoder();
 
@@ -594,10 +801,36 @@ async function detectTooling(options = {}) {
 async function ensureRuntimeTools(options = {}) {
   const { onProgress } = options;
   const installStatus = createInstallStatus();
+
+  publishInstallState(onProgress, installStatus);
+
+  const capabilities = await detectTooling(options);
+  installStatus.active = false;
+  installStatus.phase = "complete";
+  installStatus.message = "Tooling detection complete";
+  installStatus.completedSteps = 1;
+  installStatus.installed = [];
+  installStatus.skipped = [];
+  publishInstallState(onProgress, installStatus);
+
+  return {
+    attempted: false,
+    installed: [],
+    skipped: [],
+    capabilities
+  };
+}
+
+async function installMissingRuntimeTools(options = {}) {
+  const { onProgress } = options;
+  const installStatus = createInstallStatus();
   const toolsBin = managedBinDir(options);
   const toolsPackages = managedPackagesDir(options);
   const extraPaths = [toolsBin].filter(Boolean);
-  const installOptions = { ...options, extraPaths };
+  const installOptions = withTimeout(
+    { ...options, extraPaths },
+    normalizeTimeoutMs(options.installTimeoutMs) || DEFAULT_INSTALL_TIMEOUT_MS
+  );
 
   if (toolsBin) {
     await ensureDir(toolsBin);
@@ -607,33 +840,47 @@ async function ensureRuntimeTools(options = {}) {
 
   publishInstallState(onProgress, installStatus);
 
-  if (!["darwin", "win32"].includes(process.platform)) {
+  const current = await detectTooling(installOptions);
+  const installPlan = AUTO_INSTALL_TOOLS.filter((tool) => {
+    if (current[tool.key]?.available) {
+      return false;
+    }
+    return tool.installCandidates.some((rawCandidate) => {
+      const candidate = normalizeInstallCandidate(rawCandidate);
+      return candidateIsTrustedAutomaticInstall(candidate);
+    });
+  });
+  const blockedTools = AUTO_INSTALL_TOOLS.filter((tool) => {
+    if (current[tool.key]?.available) {
+      return false;
+    }
+    const hasBlockedCandidate = tool.installCandidates.some((rawCandidate) => {
+      const candidate = normalizeInstallCandidate(rawCandidate);
+      return candidate && !candidateIsTrustedAutomaticInstall(candidate);
+    });
+    return hasBlockedCandidate && !installPlan.includes(tool);
+  });
+
+  if (!installPlan.length) {
     installStatus.active = false;
     installStatus.phase = "complete";
-    installStatus.message = "Automatic tooling install is currently available on macOS and Windows";
+    installStatus.message = blockedTools.length
+      ? "Automatic tooling install is limited to trusted managed installers"
+      : "Local tooling is ready";
     installStatus.completedSteps = 1;
-    installStatus.skipped = ["automatic tooling install is currently wired for macOS and Windows"];
+    installStatus.skipped = blockedTools.map((tool) =>
+      describeBlockedInstallCandidates(
+        tool,
+        tool.installCandidates
+          .map((rawCandidate) => normalizeInstallCandidate(rawCandidate))
+          .filter((candidate) => candidate && !candidateIsTrustedAutomaticInstall(candidate))
+      )
+    );
     publishInstallState(onProgress, installStatus);
     return {
       attempted: false,
       installed: [],
       skipped: installStatus.skipped
-    };
-  }
-
-  const current = await detectTooling(installOptions);
-  const installPlan = AUTO_INSTALL_TOOLS.filter((tool) => !current[tool.key]?.available && isToolAutoInstallSupported(tool));
-
-  if (!installPlan.length) {
-    installStatus.active = false;
-    installStatus.phase = "complete";
-    installStatus.message = "Local tooling is ready";
-    installStatus.completedSteps = 1;
-    publishInstallState(onProgress, installStatus);
-    return {
-      attempted: false,
-      installed: [],
-      skipped: []
     };
   }
 
@@ -643,7 +890,14 @@ async function ensureRuntimeTools(options = {}) {
   publishInstallState(onProgress, installStatus);
 
   const installed = [];
-  const skipped = [];
+  const skipped = blockedTools.map((tool) =>
+    describeBlockedInstallCandidates(
+      tool,
+      tool.installCandidates
+        .map((rawCandidate) => normalizeInstallCandidate(rawCandidate))
+        .filter((candidate) => candidate && !candidateIsTrustedAutomaticInstall(candidate))
+    )
+  );
   for (let index = 0; index < installPlan.length; index += 1) {
     const tool = installPlan[index];
     installStatus.currentTarget = tool.label;
@@ -681,5 +935,10 @@ async function ensureRuntimeTools(options = {}) {
 module.exports = {
   createInstallStatus,
   detectTooling,
-  ensureRuntimeTools
+  ensureRuntimeTools,
+  installMissingRuntimeTools,
+  __testing: {
+    normalizeInstallCandidate,
+    candidateIsTrustedAutomaticInstall
+  }
 };

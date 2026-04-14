@@ -8,8 +8,9 @@ const { pipeline } = require("node:stream/promises");
 const { spawn } = require("node:child_process");
 const { v4: uuid } = require("uuid");
 const { chunkFile } = require("./chunker");
-const { encryptPayload, decryptPayload } = require("./crypto");
+const { encryptPayload, decryptPayload, zeroizeBuffer } = require("./crypto");
 const { readObjectBucketCatalog, writeObjectBucketCatalog } = require("./catalogStore");
+const { assertValidStorageId, resolveWithinArchiveRoot } = require("./archivePathSafety");
 
 const PRECOMPRESSED_EXTENSIONS = new Set([
   ".7z",
@@ -39,8 +40,24 @@ const PRECOMPRESSED_EXTENSIONS = new Set([
   ".zip"
 ]);
 
+const STAGING_DIRECTORY = "objects/.staging";
+
 function storageIdToPath(baseDir, storageId) {
-  return path.join(baseDir, "objects", storageId.slice(0, 2), `${storageId.slice(2)}.bin`);
+  const safeStorageId = assertValidStorageId(storageId);
+  return resolveWithinArchiveRoot(
+    baseDir,
+    `objects/${safeStorageId.slice(0, 2)}/${safeStorageId.slice(2)}.bin`,
+    "archive object path"
+  );
+}
+
+function stagedStoragePath(baseDir, storageId) {
+  const safeStorageId = assertValidStorageId(storageId);
+  return resolveWithinArchiveRoot(
+    baseDir,
+    `${STAGING_DIRECTORY}/${safeStorageId}.bin.tmp`,
+    "archive staged object path"
+  );
 }
 
 function createStorageId() {
@@ -52,23 +69,27 @@ async function ensureParent(filePath) {
 }
 
 async function runCommand(command, args, inputBuffer) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args);
-    const stdout = [];
-    const stderr = [];
+  try {
+    return await new Promise((resolve, reject) => {
+      const child = spawn(command, args);
+      const stdout = [];
+      const stderr = [];
 
-    child.stdout.on("data", (chunk) => stdout.push(chunk));
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(Buffer.concat(stderr).toString() || `${command} failed`));
-        return;
-      }
-      resolve(Buffer.concat(stdout));
+      child.stdout.on("data", (chunk) => stdout.push(chunk));
+      child.stderr.on("data", (chunk) => stderr.push(chunk));
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (code !== 0) {
+          reject(new Error(Buffer.concat(stderr).toString() || `${command} failed`));
+          return;
+        }
+        resolve(Buffer.concat(stdout));
+      });
+      child.stdin.end(inputBuffer);
     });
-    child.stdin.end(inputBuffer);
-  });
+  } finally {
+    zeroizeBuffer(inputBuffer);
+  }
 }
 
 function shouldCompressArtifact(sourcePath, options = {}) {
@@ -89,11 +110,13 @@ function shouldCompressArtifact(sourcePath, options = {}) {
 
 async function compressBuffer(buffer, behavior, capabilities, options = {}) {
   const safeCapabilities = capabilities || {};
+  const lzmaCommand = safeCapabilities.lzma2Offline?.path || "7z";
+  const zstdCommand = safeCapabilities.zstd?.path || "zstd";
   if (options.compressible === false || buffer.length < 64 * 1024) {
     return { buffer, compression: { algorithm: "none", level: 0 } };
   }
   if (behavior === "max" && safeCapabilities.lzma2Offline?.available) {
-    const compressed = await runCommand("7z", ["a", "-an", "-txz", "-mx=9", "-si", "-so"], buffer);
+    const compressed = await runCommand(lzmaCommand, ["a", "-an", "-txz", "-mx=9", "-si", "-so"], buffer);
     if (compressed.length < buffer.length) {
       return {
         buffer: compressed,
@@ -115,7 +138,7 @@ async function compressBuffer(buffer, behavior, capabilities, options = {}) {
     max: ["-q", "-T1", "-9", "--stdout"]
   };
   const args = argsByBehavior[behavior] ?? argsByBehavior.balanced;
-  const compressed = await runCommand("zstd", args, buffer);
+  const compressed = await runCommand(zstdCommand, args, buffer);
   if (compressed.length >= buffer.length) {
     return { buffer, compression: { algorithm: "none", level: 0 } };
   }
@@ -129,14 +152,14 @@ async function compressBuffer(buffer, behavior, capabilities, options = {}) {
   };
 }
 
-async function decompressBuffer(buffer, compression) {
+async function decompressBuffer(buffer, compression, capabilities = {}) {
   if (!compression || compression.algorithm === "none") {
-    return buffer;
+    return Buffer.from(buffer);
   }
   if (compression.algorithm === "xz-lzma2") {
-    return runCommand("7z", ["x", "-an", "-txz", "-si", "-so"], buffer);
+    return runCommand(capabilities.lzma2Offline?.path || "7z", ["x", "-an", "-txz", "-si", "-so"], buffer);
   }
-  return runCommand("zstd", ["-q", "-d", "--stdout"], buffer);
+  return runCommand(capabilities.zstd?.path || "zstd", ["-q", "-d", "--stdout"], buffer);
 }
 
 class ObjectStore {
@@ -145,6 +168,7 @@ class ObjectStore {
     this.capabilities = capabilities;
     this.bucketCache = new Map();
     this.dirtyBuckets = new Set();
+    this.pendingWrites = new Map();
   }
 
   async loadBucket(prefix) {
@@ -159,7 +183,31 @@ class ObjectStore {
     this.dirtyBuckets.add(prefix);
   }
 
+  async stageObjectWrite(storageId, ciphertext) {
+    const filePath = stagedStoragePath(this.session.path, storageId);
+    await ensureParent(filePath);
+    await fsp.writeFile(filePath, ciphertext);
+    this.pendingWrites.set(storageId, filePath);
+  }
+
+  async finalizePendingWrites() {
+    for (const [storageId, stagedPath] of this.pendingWrites.entries()) {
+      const finalPath = storageIdToPath(this.session.path, storageId);
+      await ensureParent(finalPath);
+      await fsp.rename(stagedPath, finalPath);
+    }
+    this.pendingWrites.clear();
+  }
+
+  async discardPendingWrites() {
+    for (const stagedPath of this.pendingWrites.values()) {
+      await fsp.rm(stagedPath, { force: true }).catch(() => {});
+    }
+    this.pendingWrites.clear();
+  }
+
   async flushDirtyBuckets() {
+    await this.finalizePendingWrites();
     for (const prefix of this.dirtyBuckets) {
       const bucket = this.bucketCache.get(prefix);
       if (!bucket) {
@@ -191,9 +239,7 @@ class ObjectStore {
         const compressed = await compressBuffer(chunk.buffer, behavior, this.capabilities, { compressible });
         const encrypted = await encryptPayload(compressed.buffer, this.session.archiveKey);
         const storageId = createStorageId();
-        const filePath = storageIdToPath(this.session.path, storageId);
-        await ensureParent(filePath);
-        await fsp.writeFile(filePath, encrypted.ciphertext);
+        await this.stageObjectWrite(storageId, encrypted.ciphertext);
 
         object = {
           hash: chunk.hash,
@@ -205,8 +251,7 @@ class ObjectStore {
           crypto: {
             header: encrypted.header,
             wrappedKey: encrypted.wrappedKey
-          },
-          file: path.relative(this.session.path, filePath)
+          }
         };
         bucket.objects[chunk.hash] = object;
         this.session.root.stats.storedObjectCount += 1;
@@ -249,16 +294,24 @@ class ObjectStore {
         throw new Error(`Chunk ${chunkRef.hash} is missing from the archive object store`);
       }
 
-      const encrypted = await fsp.readFile(path.join(this.session.path, object.file));
-      const decrypted = await decryptPayload(
-        {
-          header: object.crypto.header,
-          wrappedKey: object.crypto.wrappedKey,
-          ciphertext: encrypted
-        },
-        this.session.archiveKey
-      );
-      yield decompressBuffer(decrypted, object.compression);
+      const encrypted = await fsp.readFile(storageIdToPath(this.session.path, object.storageId));
+      try {
+        const decrypted = await decryptPayload(
+          {
+            header: object.crypto.header,
+            wrappedKey: object.crypto.wrappedKey,
+            ciphertext: encrypted
+          },
+          this.session.archiveKey
+        );
+        try {
+          yield await decompressBuffer(decrypted, object.compression, this.capabilities);
+        } finally {
+          zeroizeBuffer(decrypted);
+        }
+      } finally {
+        zeroizeBuffer(encrypted);
+      }
     }
   }
 
@@ -276,14 +329,28 @@ class ObjectStore {
   async materializeObjectToTempPath(descriptor, extension = "", prefix = "stow-materialized-") {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
     const outputPath = path.join(tempDir, `artifact${extension}`);
-    await this.materializeObjectToFile(descriptor, outputPath);
-    return outputPath;
+    try {
+      await this.materializeObjectToFile(descriptor, outputPath);
+      return outputPath;
+    } catch (error) {
+      await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
   }
 
   async releaseArtifact(descriptor) {
     for (const chunkRef of descriptor?.chunks || []) {
       const prefix = chunkRef.hash.slice(0, 2);
-      const bucket = await this.loadBucket(prefix);
+      let bucket;
+      try {
+        bucket = await this.loadBucket(prefix);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Unsafe legacy object metadata")) {
+          continue;
+        }
+        throw error;
+      }
       const object = bucket.objects[chunkRef.hash];
       if (!object) {
         continue;
@@ -294,7 +361,11 @@ class ObjectStore {
         delete bucket.objects[chunkRef.hash];
         this.session.root.stats.storedObjectCount = Math.max(0, this.session.root.stats.storedObjectCount - 1);
         this.session.root.stats.storedBytes = Math.max(0, this.session.root.stats.storedBytes - object.storedSize);
-        await fsp.rm(path.join(this.session.path, object.file), { force: true }).catch(() => {});
+        try {
+          await fsp.rm(storageIdToPath(this.session.path, object.storageId), { force: true });
+        } catch (_error) {
+          // Best-effort cleanup. Legacy or malformed metadata may not have a usable storage path.
+        }
       }
       this.markBucketDirty(prefix);
     }
@@ -307,10 +378,52 @@ class ObjectStore {
     }
     await this.flushDirtyBuckets();
   }
+
+  async reconcileStorage() {
+    await this.discardPendingWrites();
+
+    const stagingDir = resolveWithinArchiveRoot(this.session.path, STAGING_DIRECTORY, "archive object staging directory");
+    await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+
+    const referencedPaths = new Set();
+    const objectCatalogDir = resolveWithinArchiveRoot(this.session.path, "catalog/objects", "archive object catalog directory");
+    const bucketEntries = await fsp.readdir(objectCatalogDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of bucketEntries) {
+      if (!entry.isFile() || !entry.name.endsWith(".enc")) {
+        continue;
+      }
+      const prefix = entry.name.slice(0, -4);
+      const bucket = await readObjectBucketCatalog(this.session.path, this.session.archiveKey, prefix);
+      this.bucketCache.set(prefix, bucket);
+      for (const object of Object.values(bucket.objects || {})) {
+        referencedPaths.add(storageIdToPath(this.session.path, object.storageId));
+      }
+    }
+
+    const objectRoot = resolveWithinArchiveRoot(this.session.path, "objects", "archive objects directory");
+    const objectDirs = await fsp.readdir(objectRoot, { withFileTypes: true }).catch(() => []);
+    for (const entry of objectDirs) {
+      if (!entry.isDirectory() || entry.name.startsWith(".")) {
+        continue;
+      }
+      const prefixDir = path.join(objectRoot, entry.name);
+      const objectFiles = await fsp.readdir(prefixDir, { withFileTypes: true }).catch(() => []);
+      for (const objectFile of objectFiles) {
+        if (!objectFile.isFile() || !objectFile.name.endsWith(".bin")) {
+          continue;
+        }
+        const absolutePath = path.join(prefixDir, objectFile.name);
+        if (!referencedPaths.has(absolutePath)) {
+          await fsp.rm(absolutePath, { force: true }).catch(() => {});
+        }
+      }
+    }
+  }
 }
 
 module.exports = {
   ObjectStore,
   createStorageId,
+  stagedStoragePath,
   storageIdToPath
 };

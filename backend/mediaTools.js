@@ -1,10 +1,8 @@
 const fs = require("node:fs/promises");
+const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const sharp = require("sharp");
 const mime = require("mime-types");
-const ffmpegStatic = require("ffmpeg-static");
-const ffprobeStatic = require("ffprobe-static");
 const { v4: uuid } = require("uuid");
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".avif", ".jxl"]);
@@ -12,14 +10,84 @@ const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v
 const LOSSLESS_IMAGE_EXTENSIONS = new Set([".png", ".tif", ".tiff", ".bmp", ".jxl"]);
 const LIKELY_LOSSY_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".webp", ".avif"]);
 const BAD_IMAGE_TRANSCODE_EXTENSIONS = new Set([".gif", ".svg"]);
+const DEFAULT_FFMPEG_TIMEOUT_MS = 120_000;
+const DEFAULT_FFPROBE_TIMEOUT_MS = 30_000;
+const DEFAULT_CJXL_TIMEOUT_MS = 120_000;
+const DEFAULT_DJXL_TIMEOUT_MS = 120_000;
+const SHARP_INPUT_FORMAT_BY_EXTENSION = new Map([
+  [".jpg", "jpeg"],
+  [".jpeg", "jpeg"],
+  [".png", "png"],
+  [".webp", "webp"],
+  [".tif", "tiff"],
+  [".tiff", "tiff"],
+  [".gif", "gif"],
+  [".avif", "heif"],
+  [".jxl", "jxl"]
+]);
+
+let sharpModule = null;
+let sharpModuleLoaded = false;
+let ffmpegStaticPath = null;
+let ffmpegStaticLoaded = false;
+let ffprobeStatic = null;
+let ffprobeStaticLoaded = false;
+
+function loadOptionalModule(moduleName) {
+  try {
+    return require(moduleName);
+  } catch (error) {
+    if (error instanceof Error && error.code === "MODULE_NOT_FOUND" && error.message.includes(`'${moduleName}'`)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function getSharp() {
+  if (!sharpModuleLoaded) {
+    sharpModule = loadOptionalModule("sharp");
+    sharpModuleLoaded = true;
+  }
+  return sharpModule;
+}
+
+function getFfmpegStaticPath() {
+  if (!ffmpegStaticLoaded) {
+    ffmpegStaticPath = loadOptionalModule("ffmpeg-static");
+    ffmpegStaticLoaded = true;
+  }
+  return ffmpegStaticPath;
+}
+
+function getFfprobeStatic() {
+  if (!ffprobeStaticLoaded) {
+    ffprobeStatic = loadOptionalModule("ffprobe-static");
+    ffprobeStaticLoaded = true;
+  }
+  return ffprobeStatic;
+}
 
 function extname(filePath) {
   return path.extname(filePath).toLowerCase();
 }
 
+function supportsSharpImageInput(filePath) {
+  const sharp = getSharp();
+  if (!sharp) {
+    return false;
+  }
+  const formatId = SHARP_INPUT_FORMAT_BY_EXTENSION.get(extname(filePath));
+  return Boolean(formatId && sharp.format[formatId]?.input?.file);
+}
+
+function canDecodeWithDjxl(filePath, capabilities) {
+  return extname(filePath) === ".jxl" && Boolean(capabilities?.djxl?.available);
+}
+
 function classifyPath(filePath) {
   const extension = extname(filePath);
-  if (IMAGE_EXTENSIONS.has(extension)) {
+  if (IMAGE_EXTENSIONS.has(extension) && supportsSharpImageInput(filePath)) {
     return "image";
   }
   if (VIDEO_EXTENSIONS.has(extension)) {
@@ -32,45 +100,143 @@ function fileDisplayType(filePath) {
   return mime.lookup(filePath) || "application/octet-stream";
 }
 
+function buildOpaqueFileAnalysis(filePath, action = "stored as general file object") {
+  return {
+    kind: "file",
+    original: {
+      path: filePath,
+      extension: extname(filePath),
+      mime: fileDisplayType(filePath),
+      width: null,
+      height: null,
+      codec: null
+    },
+    derivative: null,
+    actions: [action],
+    summary: "generic file",
+    previewSourcePath: null
+  };
+}
+
+function normalizeTimeoutMs(timeoutMs) {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return null;
+  }
+
+  return Math.floor(timeoutMs);
+}
+
 async function spawnCapture(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, options);
+    const { timeoutMs: requestedTimeoutMs, ...spawnOptions } = options;
+    const timeoutMs = normalizeTimeoutMs(requestedTimeoutMs);
+    let child;
     const stdout = [];
     const stderr = [];
-    child.stdout.on("data", (chunk) => stdout.push(chunk));
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        const stderrText = Buffer.concat(stderr).toString().trim();
-        const stdoutText = Buffer.concat(stdout).toString().trim();
-        reject(new Error(stderrText || stdoutText || `${command} exited with code ${code ?? "unknown"}`));
+    let settled = false;
+    let timeoutId = null;
+
+    const settle = (callback) => {
+      if (settled) {
         return;
       }
-      resolve(Buffer.concat(stdout).toString("utf8"));
-    });
+
+      settled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      callback();
+    };
+
+    try {
+      child = spawn(command, args, spawnOptions);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    child.stdout?.on?.("data", (chunk) => stdout.push(chunk));
+    child.stderr?.on?.("data", (chunk) => stderr.push(chunk));
+    child.on("error", (error) =>
+      settle(() => {
+        reject(error);
+      })
+    );
+    child.on("close", (code) =>
+      settle(() => {
+        if (code !== 0) {
+          const stderrText = Buffer.concat(stderr).toString().trim();
+          const stdoutText = Buffer.concat(stdout).toString().trim();
+          reject(new Error(stderrText || stdoutText || `${command} exited with code ${code ?? "unknown"}`));
+          return;
+        }
+        resolve(Buffer.concat(stdout).toString("utf8"));
+      })
+    );
+
+    if (timeoutMs) {
+      timeoutId = setTimeout(() => {
+        settle(() => {
+          try {
+            child.kill?.("SIGKILL");
+          } catch (_error) {
+            // The timeout result is authoritative even if termination fails.
+          }
+          reject(new Error(`${command} timed out after ${timeoutMs}ms`));
+        });
+      }, timeoutMs);
+    }
   });
 }
 
 async function runFfmpeg(args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(ffmpegStatic, args);
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(stderr || "ffmpeg failed"));
-        return;
-      }
-      resolve(stderr);
-    });
+  const ffmpegStatic = getFfmpegStaticPath();
+  if (!ffmpegStatic) {
+    throw new Error("ffmpeg-static is not available");
+  }
+
+  await spawnCapture(ffmpegStatic, args, {
+    timeoutMs: DEFAULT_FFMPEG_TIMEOUT_MS
   });
 }
 
+async function decodeJxlToPng(sourcePath, outputPath, capabilities) {
+    const djxlCommand = capabilities?.djxl?.path || "djxl";
+  await spawnCapture(djxlCommand, [sourcePath, outputPath], {
+    timeoutMs: DEFAULT_DJXL_TIMEOUT_MS
+  });
+  return outputPath;
+}
+
+async function detectAv1Encoder() {
+  const ffmpegStatic = getFfmpegStaticPath();
+  if (!ffmpegStatic) {
+    return null;
+  }
+
+  try {
+    const output = await spawnCapture(ffmpegStatic, ["-hide_banner", "-encoders"], {
+      timeoutMs: DEFAULT_FFMPEG_TIMEOUT_MS
+    });
+    if (/\blibsvtav1\b/.test(output)) {
+      return "libsvtav1";
+    }
+    if (/\blibaom-av1\b/.test(output)) {
+      return "libaom-av1";
+    }
+  } catch (_error) {
+    return null;
+  }
+
+  return null;
+}
+
 async function getVideoProbe(filePath) {
+  const ffprobeStatic = getFfprobeStatic();
+  if (!ffprobeStatic?.path) {
+    throw new Error("ffprobe-static is not available");
+  }
+
   const output = await spawnCapture(ffprobeStatic.path, [
     "-v",
     "quiet",
@@ -79,7 +245,9 @@ async function getVideoProbe(filePath) {
     "-show_streams",
     "-show_format",
     filePath
-  ]);
+  ], {
+    timeoutMs: DEFAULT_FFPROBE_TIMEOUT_MS
+  });
   return JSON.parse(output);
 }
 
@@ -110,6 +278,8 @@ async function transcodeImageToJxl(filePath, preferences, capabilities, workDir,
   const actions = [];
   const extension = extname(filePath);
   const derivative = null;
+  const cjxlCommand = capabilities?.cjxl?.path || "cjxl";
+  const sharp = getSharp();
 
   if ((metadata.pages || 1) > 1 || BAD_IMAGE_TRANSCODE_EXTENSIONS.has(extension)) {
     actions.push("preserved original because this image format is not eligible for derivative transcoding");
@@ -142,10 +312,13 @@ async function transcodeImageToJxl(filePath, preferences, capabilities, workDir,
   }
 
   await spawnCapture(
-    "cjxl",
+    cjxlCommand,
     buildJxlEncodeArgs(sourceForEncode, outputJxlPath, {
       mathematicallyLossless: preferences.optimizationMode === "lossless" && mathematicallyLosslessSource
-    })
+    }),
+    {
+      timeoutMs: DEFAULT_CJXL_TIMEOUT_MS
+    }
   );
 
   return {
@@ -161,6 +334,35 @@ async function transcodeImageToJxl(filePath, preferences, capabilities, workDir,
       ]
     },
     actions
+  };
+}
+
+async function optimizeDecodedJxlImage(filePath, capabilities, workDir) {
+  const sharp = getSharp();
+  if (!sharp) {
+    return buildOpaqueFileAnalysis(filePath, "stored as general file object because sharp is unavailable");
+  }
+
+  const decodedPath = await decodeJxlToPng(filePath, path.join(workDir, `${uuid()}.png`), capabilities);
+  const metadata = await sharp(decodedPath, { animated: true }).metadata();
+
+  return {
+    kind: "image",
+    original: {
+      path: filePath,
+      extension: extname(filePath),
+      mime: fileDisplayType(filePath),
+      width: metadata.width || null,
+      height: metadata.height || null,
+      codec: null
+    },
+    derivative: null,
+    actions: [
+      "decoded JPEG XL with djxl for analysis and previews",
+      "preserved original because source is already JPEG XL"
+    ],
+    summary: `${metadata.width || "?"}x${metadata.height || "?"}`,
+    previewSourcePath: decodedPath
   };
 }
 
@@ -230,6 +432,11 @@ async function transcodeVideo(filePath, preferences, capabilities, workDir) {
 }
 
 async function optimizeImage(filePath, preferences, capabilities, workDir) {
+  const sharp = getSharp();
+  if (!sharp) {
+    return buildOpaqueFileAnalysis(filePath, "stored as general file object because sharp is unavailable");
+  }
+
   const metadata = await sharp(filePath, { animated: true }).metadata();
   const extension = extname(filePath);
   const actions = [];
@@ -275,45 +482,73 @@ async function optimizeVideo(filePath, preferences, capabilities, workDir) {
   };
 }
 
-async function generatePreviewFile(sourcePath, kind, variant, outputDir) {
+async function generatePreviewFile(sourcePath, kind, variant, outputDir, capabilities = {}) {
   const previewSize = variant === "thumbnail" ? 128 : 320;
   await fs.mkdir(outputDir, { recursive: true });
 
   if (kind === "image") {
+    const sharp = getSharp();
+    if (!sharp) {
+      return null;
+    }
+
+    let sharpSourcePath = sourcePath;
+    let tempDir = null;
+
+    if (!supportsSharpImageInput(sourcePath)) {
+      if (!canDecodeWithDjxl(sourcePath, capabilities)) {
+        return null;
+      }
+
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-preview-jxl-"));
+      sharpSourcePath = await decodeJxlToPng(sourcePath, path.join(tempDir, "decoded.png"), capabilities);
+    }
+
     const webpPath = path.join(outputDir, `${variant}.webp`);
     try {
-      await sharp(sourcePath)
-        .resize({
-          width: previewSize,
-          height: previewSize,
-          fit: "inside",
-          withoutEnlargement: true
-        })
-        .webp({ quality: 72, effort: 4 })
-        .toFile(webpPath);
-      return {
-        path: webpPath,
-        mime: "image/webp"
-      };
-    } catch (_error) {
-      const pngPath = path.join(outputDir, `${variant}.png`);
-      await sharp(sourcePath)
-        .resize({
-          width: previewSize,
-          height: previewSize,
-          fit: "inside",
-          withoutEnlargement: true
-        })
-        .png()
-        .toFile(pngPath);
-      return {
-        path: pngPath,
-        mime: "image/png"
-      };
+      try {
+        await sharp(sharpSourcePath)
+          .resize({
+            width: previewSize,
+            height: previewSize,
+            fit: "inside",
+            withoutEnlargement: true
+          })
+          .webp({ quality: 72, effort: 4 })
+          .toFile(webpPath);
+        return {
+          path: webpPath,
+          mime: "image/webp"
+        };
+      } catch (_error) {
+        const pngPath = path.join(outputDir, `${variant}.png`);
+        await sharp(sharpSourcePath)
+          .resize({
+            width: previewSize,
+            height: previewSize,
+            fit: "inside",
+            withoutEnlargement: true
+          })
+          .png()
+          .toFile(pngPath);
+        return {
+          path: pngPath,
+          mime: "image/png"
+        };
+      }
+    } finally {
+      if (tempDir) {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      }
     }
   }
 
-  if (kind === "video" && ffmpegStatic) {
+  if (kind === "video") {
+    const ffmpegStaticPath = getFfmpegStaticPath();
+    if (!ffmpegStaticPath) {
+      return null;
+    }
+
     const jpegPath = path.join(outputDir, `${variant}.jpg`);
     await runFfmpeg([
       "-y",
@@ -345,6 +580,18 @@ async function analyzePath(filePath, preferences, capabilities, workDir) {
     optimizationMode:
       preferences.optimizationMode === "pick_per_file" ? "visually_lossless" : preferences.optimizationMode
   };
+  const extension = extname(filePath);
+  if (IMAGE_EXTENSIONS.has(extension) && !supportsSharpImageInput(filePath)) {
+    if (canDecodeWithDjxl(filePath, capabilities) && getSharp()) {
+      return optimizeDecodedJxlImage(filePath, capabilities, workDir);
+    }
+
+    return buildOpaqueFileAnalysis(
+      filePath,
+      `stored as general file object because ${extension} images are not supported by the bundled image decoder`
+    );
+  }
+
   const kind = classifyPath(filePath);
   if (kind === "image") {
     return optimizeImage(filePath, normalizedPreferences, capabilities, workDir);
@@ -353,25 +600,12 @@ async function analyzePath(filePath, preferences, capabilities, workDir) {
     return optimizeVideo(filePath, normalizedPreferences, capabilities, workDir);
   }
 
-  return {
-    kind: "file",
-    original: {
-      path: filePath,
-      extension: extname(filePath),
-      mime: fileDisplayType(filePath),
-      width: null,
-      height: null,
-      codec: null
-    },
-    derivative: null,
-    actions: ["stored as general file object"],
-    summary: "generic file",
-    previewSourcePath: null
-  };
+  return buildOpaqueFileAnalysis(filePath);
 }
 
 module.exports = {
   analyzePath,
   classifyPath,
+  detectAv1Encoder,
   generatePreviewFile
 };

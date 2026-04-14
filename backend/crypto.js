@@ -2,11 +2,27 @@ const sodium = require("libsodium-wrappers-sumo");
 const { argon2id } = require("hash-wasm");
 
 function toBase64(value) {
-  return Buffer.from(value).toString("base64");
+  return toBufferView(value).toString("base64");
 }
 
 function fromBase64(value) {
   return Buffer.from(value, "base64");
+}
+
+function toBufferView(value) {
+  if (Buffer.isBuffer(value)) {
+    return value;
+  }
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  }
+  return Buffer.from(value);
+}
+
+function zeroizeBuffer(value) {
+  if (value && typeof value.fill === "function") {
+    value.fill(0);
+  }
 }
 
 async function derivePasswordKey(password, salt, profile) {
@@ -18,45 +34,54 @@ async function derivePasswordKey(password, salt, profile) {
   const params = paramsByProfile[profile] ?? paramsByProfile.balanced;
   const key = await argon2id({
     password,
-    salt: salt.toString("hex"),
+    salt,
     parallelism: params.parallelism,
     iterations: params.iterations,
     memorySize: params.memorySize,
     hashLength: 32,
-    outputType: "hex"
+    outputType: "binary"
   });
 
   return {
-    key: Buffer.from(key, "hex"),
+    key: toBufferView(key),
     params
   };
 }
 
 async function createArchiveEncryption(password, profile) {
   await sodium.ready;
-  const salt = Buffer.from(sodium.randombytes_buf(16));
-  const archiveKey = Buffer.from(sodium.randombytes_buf(32));
+  const salt = toBufferView(sodium.randombytes_buf(16));
+  const archiveKey = toBufferView(sodium.randombytes_buf(32));
+  const nonce = toBufferView(sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES));
   const { key: passwordKey, params } = await derivePasswordKey(password, salt, profile);
-  const nonce = Buffer.from(sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES));
-  const ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
-    archiveKey,
-    null,
-    null,
-    nonce,
-    passwordKey
-  );
+  let ciphertext = null;
 
-  return {
-    archiveKey,
-    header: {
-      salt: toBase64(salt),
-      params,
-      wrap: {
-        nonce: toBase64(nonce),
-        ciphertext: toBase64(ciphertext)
+  try {
+    ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+      archiveKey,
+      null,
+      null,
+      nonce,
+      passwordKey
+    );
+
+    return {
+      archiveKey,
+      header: {
+        salt: toBase64(salt),
+        params,
+        wrap: {
+          nonce: toBase64(nonce),
+          ciphertext: toBase64(ciphertext)
+        }
       }
-    }
-  };
+    };
+  } finally {
+    zeroizeBuffer(passwordKey);
+    zeroizeBuffer(salt);
+    zeroizeBuffer(nonce);
+    zeroizeBuffer(ciphertext);
+  }
 }
 
 async function unlockArchiveKey(password, header) {
@@ -65,15 +90,25 @@ async function unlockArchiveKey(password, header) {
   const { key: passwordKey } = await derivePasswordKey(password, salt, header.profile || inferProfile(header.params));
   const nonce = fromBase64(header.wrap.nonce);
   const ciphertext = fromBase64(header.wrap.ciphertext);
-  const plaintext = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-    null,
-    ciphertext,
-    null,
-    nonce,
-    passwordKey
-  );
+  let plaintext = null;
 
-  return Buffer.from(plaintext);
+  try {
+    plaintext = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+      null,
+      ciphertext,
+      null,
+      nonce,
+      passwordKey
+    );
+
+    return Buffer.from(plaintext);
+  } finally {
+    zeroizeBuffer(passwordKey);
+    zeroizeBuffer(salt);
+    zeroizeBuffer(nonce);
+    zeroizeBuffer(ciphertext);
+    zeroizeBuffer(plaintext);
+  }
 }
 
 function inferProfile(params) {
@@ -88,49 +123,79 @@ function inferProfile(params) {
 
 async function encryptPayload(payload, archiveKey) {
   await sodium.ready;
-  const dataKey = Buffer.from(sodium.randombytes_buf(32));
-  const wrapNonce = Buffer.from(sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES));
-  const wrappedKey = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(dataKey, null, null, wrapNonce, archiveKey);
-  const init = sodium.crypto_secretstream_xchacha20poly1305_init_push(dataKey);
-  const cipher = sodium.crypto_secretstream_xchacha20poly1305_push(
-    init.state,
-    payload,
-    null,
-    sodium.crypto_secretstream_xchacha20poly1305_TAG_FINAL
-  );
+  const dataKey = toBufferView(sodium.randombytes_buf(32));
+  const wrapNonce = toBufferView(sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES));
+  let wrappedKey = null;
+  let init = null;
+  let cipher = null;
 
-  return {
-    wrappedKey: {
-      nonce: toBase64(wrapNonce),
-      ciphertext: toBase64(wrappedKey)
-    },
-    header: toBase64(init.header),
-    ciphertext: Buffer.from(cipher)
-  };
+  try {
+    wrappedKey = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(dataKey, null, null, wrapNonce, archiveKey);
+    init = sodium.crypto_secretstream_xchacha20poly1305_init_push(dataKey);
+    cipher = sodium.crypto_secretstream_xchacha20poly1305_push(
+      init.state,
+      payload,
+      null,
+      sodium.crypto_secretstream_xchacha20poly1305_TAG_FINAL
+    );
+
+    return {
+      wrappedKey: {
+        nonce: toBase64(wrapNonce),
+        ciphertext: toBase64(wrappedKey)
+      },
+      header: toBase64(init.header),
+      ciphertext: Buffer.from(cipher)
+    };
+  } finally {
+    zeroizeBuffer(dataKey);
+    zeroizeBuffer(wrapNonce);
+    zeroizeBuffer(wrappedKey);
+    zeroizeBuffer(init?.header);
+    zeroizeBuffer(cipher);
+  }
 }
 
 async function decryptPayload(encrypted, archiveKey) {
   await sodium.ready;
   const wrapNonce = fromBase64(encrypted.wrappedKey.nonce);
   const wrappedKey = fromBase64(encrypted.wrappedKey.ciphertext);
-  const dataKey = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-    null,
-    wrappedKey,
-    null,
-    wrapNonce,
-    archiveKey
-  );
-  const state = sodium.crypto_secretstream_xchacha20poly1305_init_pull(
-    fromBase64(encrypted.header),
-    dataKey
-  );
-  const result = sodium.crypto_secretstream_xchacha20poly1305_pull(state, encrypted.ciphertext);
-  return Buffer.from(result.message);
+  const header = fromBase64(encrypted.header);
+  let dataKey = null;
+  let state = null;
+  let result = null;
+
+  try {
+    dataKey = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+      null,
+      wrappedKey,
+      null,
+      wrapNonce,
+      archiveKey
+    );
+    state = sodium.crypto_secretstream_xchacha20poly1305_init_pull(header, dataKey);
+    result = sodium.crypto_secretstream_xchacha20poly1305_pull(state, encrypted.ciphertext);
+    return Buffer.from(result.message);
+  } finally {
+    zeroizeBuffer(wrapNonce);
+    zeroizeBuffer(wrappedKey);
+    zeroizeBuffer(header);
+    zeroizeBuffer(dataKey);
+    zeroizeBuffer(result?.message);
+  }
 }
 
 module.exports = {
   createArchiveEncryption,
   unlockArchiveKey,
   encryptPayload,
-  decryptPayload
+  decryptPayload,
+  zeroizeBuffer,
+  __test__: {
+    toBase64,
+    fromBase64,
+    toBufferView,
+    zeroizeBuffer,
+    derivePasswordKey
+  }
 };

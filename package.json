@@ -7,10 +7,13 @@
   "scripts": {
     "dev": "tauri dev",
     "dev:web": "vite",
-    "build": "tauri build",
+    "prepare:runtime-node": "node src-tauri/scripts/prepare-node-runtime.cjs",
+    "build": "npm run prepare:runtime-node && tauri build",
     "build:web": "vite build",
     "bench:backend": "node backend/benchmarks.js",
-    "test:backend": "node --test backend/**/*.test.js"
+    "test:backend": "node --test backend/*.test.js backend/*.integration.test.js",
+    "test:frontend": "npx --yes tsx --test src/features/archive/archiveModel.test.ts",
+    "test:runtime-node": "node --test src-tauri/scripts/prepare-node-runtime.test.js"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.12",

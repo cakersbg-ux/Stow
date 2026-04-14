@@ -5,9 +5,12 @@ export type Settings = {
   deleteOriginalFilesAfterSuccessfulUpload: boolean;
   argonProfile: "balanced" | "strong" | "constrained";
   preferredArchiveRoot: string;
+  themePreference: "system" | "light" | "dark";
   sessionIdleMinutes: number;
   sessionLockOnHide: boolean;
 };
+
+export type ArchivePreferences = Pick<Settings, "compressionBehavior" | "optimizationMode" | "stripDerivativeMetadata">;
 
 export type RecentArchive = {
   path: string;
@@ -63,7 +66,6 @@ export type ArchiveRevision = {
   id: string;
   addedAt: string;
   source: {
-    absolutePath: string;
     relativePath: string;
     size: number;
   } | null;
@@ -81,14 +83,17 @@ export type ArchiveRevision = {
 
 export type ArchiveEntryListItem = {
   id: string;
+  entryType: "file" | "folder";
   name: string;
   relativePath: string;
   fileKind: string;
-  mime: string;
-  size: number;
-  latestRevisionId: string;
+  mime: string | null;
+  size: number | null;
+  sourceSize: number | null;
+  latestRevisionId: string | null;
   overrideMode: "lossless" | "visually_lossless" | null;
   previewable: boolean;
+  childCount: number | null;
 };
 
 export type ArchiveEntryDetail = {
@@ -98,6 +103,7 @@ export type ArchiveEntryDetail = {
   fileKind: string;
   mime: string;
   size: number;
+  sourceSize: number;
   createdAt: string;
   latestRevisionId: string;
   revisions: ArchiveRevision[];
@@ -146,7 +152,9 @@ export type ArchiveSummary = {
   logicalBytes: number;
   storedBytes: number;
   updatedAt: string;
+  preferences: ArchivePreferences;
   session: ArchiveSessionInfo | null;
+  folders: string[];
 };
 
 export type AppShellState = {
@@ -173,14 +181,16 @@ declare global {
       onEntriesInvalidated: (listener: (payload: { archiveId: string; reason: string; selectedEntryId: string | null }) => void) => () => void;
       saveSettings: (settings: Settings) => Promise<AppShellState>;
       resetSettings: () => Promise<AppShellState>;
+      installMissingTools: () => Promise<AppShellState>;
       pickDirectory: () => Promise<string | null>;
       pickFiles: () => Promise<string[]>;
       pickFilesOrFolders: () => Promise<string[]>;
+      setArchivePreferences: (preferences: ArchivePreferences) => Promise<AppShellState>;
       createArchive: (payload: {
         parentPath: string;
         name: string;
         password: string;
-        preferences: Settings;
+        preferences: ArchivePreferences;
       }) => Promise<AppShellState>;
       openArchive: (payload: { archivePath: string; password: string }) => Promise<AppShellState>;
       closeArchive: () => Promise<AppShellState>;
@@ -189,16 +199,31 @@ declare global {
       removeRecentArchive: (archivePath: string) => Promise<AppShellState>;
       deleteArchive: (archivePath: string) => Promise<AppShellState>;
       listDetectedArchives: () => Promise<DetectedArchive[]>;
-      addPaths: (paths: string[]) => Promise<AppShellState>;
-      listEntries: (payload: { offset: number; limit: number }) => Promise<{ total: number; items: ArchiveEntryListItem[] }>;
+      addPaths: (paths: string[], destinationDirectory?: string) => Promise<AppShellState>;
+      listEntries: (payload: {
+        directory?: string;
+        offset: number;
+        limit: number;
+        sortColumn?: "name" | "type" | "size";
+        sortDirection?: "asc" | "desc";
+      }) => Promise<{ total: number; items: ArchiveEntryListItem[] }>;
       getEntryDetail: (entryId: string) => Promise<ArchiveEntryDetail>;
       getArchiveStats: () => Promise<ArchiveStats>;
       reprocessEntry: (entryId: string, overrideMode: "lossless" | "visually_lossless") => Promise<AppShellState>;
       deleteEntry: (entryId: string) => Promise<AppShellState>;
+      deleteFolder: (relativePath: string) => Promise<AppShellState>;
       renameEntry: (entryId: string, name: string) => Promise<AppShellState>;
+      createFolder: (payload: { relativePath: string }) => Promise<AppShellState>;
+      moveEntry: (payload: { entryId: string; destinationDirectory: string }) => Promise<AppShellState>;
+      deleteEntries: (entryIds: string[]) => Promise<AppShellState>;
+      moveEntries: (payload: { entryIds: string[]; destinationDirectory: string }) => Promise<AppShellState>;
+      exportEntries: (entryIds: string[], variant: "original" | "optimized") => Promise<AppShellState>;
       exportEntry: (entryId: string, variant: "original" | "optimized") => Promise<AppShellState>;
       openEntryExternally: (entryId: string) => Promise<AppShellState>;
       resolveEntryPreview: (entryId: string, previewKind?: "thumbnail" | "preview") => Promise<PreviewDescriptor | null>;
+      onDragDrop: (listener: (payload: { paths: string[]; position: { x: number; y: number } }) => void) => () => void;
+      onDragEnter: (listener: (payload: { paths: string[]; position: { x: number; y: number } }) => void) => () => void;
+      onDragLeave: (listener: () => void) => () => void;
     };
   }
 }

@@ -1,5 +1,6 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { atomicWriteJson } = require("./atomicFile");
 
 const DEFAULT_MAX_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -92,7 +93,7 @@ class PreviewCache {
     const dir = this.previewDir(key);
     const beforeBytes = await measureDirBytes(dir).catch(() => 0);
     await ensureDir(dir);
-    await fs.writeFile(this.metadataPath(key), JSON.stringify(descriptor, null, 2));
+    await atomicWriteJson(this.metadataPath(key), descriptor);
     const afterBytes = await measureDirBytes(dir).catch(() => beforeBytes);
     this.currentBytes = Math.max(0, this.currentBytes - beforeBytes + afterBytes);
     if (this.currentBytes > this.maxBytes) {
@@ -104,6 +105,17 @@ class PreviewCache {
   async deletePreviewDir(key) {
     const removedBytes = await measureDirBytes(this.previewDir(key)).catch(() => 0);
     await fs.rm(this.previewDir(key), { recursive: true, force: true }).catch(() => {});
+    this.currentBytes = Math.max(0, this.currentBytes - removedBytes);
+  }
+
+  async deleteArchive(archiveId) {
+    if (!archiveId) {
+      return;
+    }
+
+    const archiveDir = path.join(this.baseDir, archiveId);
+    const removedBytes = await measureDirBytes(archiveDir).catch(() => 0);
+    await fs.rm(archiveDir, { recursive: true, force: true }).catch(() => {});
     this.currentBytes = Math.max(0, this.currentBytes - removedBytes);
   }
 

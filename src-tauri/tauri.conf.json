@@ -25,16 +25,17 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-src 'none'; form-action 'self'; worker-src 'self' blob:",
+      "devCsp": "default-src 'self' http://localhost:5173; connect-src 'self' ipc: http://ipc.localhost http://localhost:5173 ws://localhost:5173; script-src 'self' 'unsafe-eval' http://localhost:5173; style-src 'self' 'unsafe-inline' http://localhost:5173; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-src 'none'; form-action 'self'; worker-src 'self' blob:",
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": ["$APPDATA/preview-cache/**"]
       }
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": ["../backend/**/*"]
+    "resources": ["../backend/**/*", "resources/node-runtime/*"]
   }
 }
