@@ -71,3 +71,12 @@ Preview images are generated only after unlock and are not stored inside the arc
 - The current implementation favors correctness and inspectability over aggressive hidden automation.
 - Video behavior depends on the encoder support in the bundled ffmpeg build.
 - “Pick per file” is implemented through post-ingest per-entry reprocessing.
+
+## Workspace Notes
+
+- `src/` contains the Vite/React frontend.
+- `src-tauri/` contains the Tauri/Rust shell.
+- `backend/` contains Node services, helpers, benchmarks, and tests.
+- `training/` contains dataset and model-training scripts.
+- `training-cache/` stays local-only and should remain untracked.
+- Common commands: `npm run dev`, `npm run build`, `npm run test:backend`, `npm run test:frontend`, and `npm run bench:backend`.

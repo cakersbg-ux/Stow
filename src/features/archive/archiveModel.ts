@@ -1,5 +1,6 @@
 import type {
   AppShellState,
+  ArchiveEntryDetail,
   ArchiveEntryListItem,
   ArchivePreferences,
   DetectedArchive,
@@ -43,10 +44,12 @@ export const LIST_PAGE_SIZE = 100;
 export const ROW_HEIGHT = 36;
 export const ARCHIVE_ENTRY_DRAG_TYPE = "application/x-stow-entry-id";
 export const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+const LOSSLESS_IMAGE_SOURCE_EXTENSIONS = new Set([".png", ".tif", ".tiff", ".bmp", ".jxl"]);
+const LOSSLESS_VIDEO_SOURCE_CODECS = new Set(["ffv1", "huffyuv", "utvideo", "rawvideo", "png", "ffvhuff"]);
 
 export const defaultArchivePreferences: ArchivePreferences = {
   compressionBehavior: "balanced",
-  optimizationMode: "visually_lossless",
+  optimizationTier: "visually_lossless",
   stripDerivativeMetadata: true
 };
 
@@ -57,7 +60,8 @@ export const defaultSettings: Settings = {
   preferredArchiveRoot: "",
   themePreference: "system",
   sessionIdleMinutes: 0,
-  sessionLockOnHide: false
+  sessionLockOnHide: false,
+  developerActivityLogEnabled: false
 };
 
 export const defaultShellState: AppShellState = {
@@ -99,6 +103,34 @@ export function formatDateTime(value: string | null | undefined) {
 
 export function formatArchiveSize(bytes: number | null) {
   return bytes === null ? "—" : formatBytes(bytes);
+}
+
+const STANDARD_RESOLUTION_LABELS = [
+  { label: "360p", pixels: 640 * 360 },
+  { label: "480p", pixels: 854 * 480 },
+  { label: "720p", pixels: 1280 * 720 },
+  { label: "1080p", pixels: 1920 * 1080 },
+  { label: "1440p", pixels: 2560 * 1440 },
+  { label: "4k", pixels: 3840 * 2160 },
+  { label: "8k", pixels: 7680 * 4320 }
+] as const;
+
+export function resolveClosestStandardResolutionLabel(width: number | null | undefined, height: number | null | undefined) {
+  if (!width || !height) return null;
+  const pixels = width * height;
+  let closest = STANDARD_RESOLUTION_LABELS[0];
+  let closestDelta = Math.abs(pixels - closest.pixels);
+
+  for (let i = 1; i < STANDARD_RESOLUTION_LABELS.length; i++) {
+    const candidate = STANDARD_RESOLUTION_LABELS[i];
+    const delta = Math.abs(pixels - candidate.pixels);
+    if (delta < closestDelta) {
+      closest = candidate;
+      closestDelta = delta;
+    }
+  }
+
+  return closest.label;
 }
 
 export function resolveTheme(preference: Settings["themePreference"], prefersDark: boolean) {
@@ -151,6 +183,20 @@ export function collectDroppedPaths(dataTransfer: DataTransfer | null | undefine
   return paths;
 }
 
+function getDataTransferTypes(dataTransfer: DataTransfer | null | undefined) {
+  const types = dataTransfer?.types;
+  return types ? Array.from(types) : [];
+}
+
+export function isArchiveEntryDrag(dataTransfer: DataTransfer | null | undefined) {
+  return getDataTransferTypes(dataTransfer).includes(ARCHIVE_ENTRY_DRAG_TYPE);
+}
+
+export function isFileDrop(dataTransfer: DataTransfer | null | undefined) {
+  const types = getDataTransferTypes(dataTransfer);
+  return types.includes("Files") || Boolean(dataTransfer?.files?.length);
+}
+
 export function readArchiveDragPayload(dataTransfer: DataTransfer | null | undefined): ArchiveDragPayload | null {
   const raw = dataTransfer?.getData(ARCHIVE_ENTRY_DRAG_TYPE);
   if (!raw) return null;
@@ -169,11 +215,22 @@ export function readArchiveDragPayload(dataTransfer: DataTransfer | null | undef
 }
 
 export function toArchivePreferences(s: Settings): ArchivePreferences {
-  return { compressionBehavior: s.compressionBehavior, optimizationMode: s.optimizationMode, stripDerivativeMetadata: s.stripDerivativeMetadata };
+  return {
+    compressionBehavior: s.compressionBehavior,
+    optimizationTier: s.optimizationTier,
+    stripDerivativeMetadata: s.stripDerivativeMetadata,
+    optimizationMode: s.optimizationMode
+  };
 }
 
 export function mergePrefs(s: Settings, p: ArchivePreferences): Settings {
-  return { ...s, compressionBehavior: p.compressionBehavior, optimizationMode: p.optimizationMode, stripDerivativeMetadata: p.stripDerivativeMetadata };
+  return {
+    ...s,
+    compressionBehavior: p.compressionBehavior,
+    optimizationTier: p.optimizationTier,
+    optimizationMode: p.optimizationMode ?? p.optimizationTier,
+    stripDerivativeMetadata: p.stripDerivativeMetadata
+  };
 }
 
 export function buildFolderTree(folders: string[]): FolderTreeNode[] {
@@ -295,4 +352,25 @@ export function resolveDetailRevision<T extends { id: string }>(
 ) {
   if (!selectedEntry) return null;
   return selectedEntry.revisions.find((revision) => revision.id === selectedEntry.latestRevisionId) ?? selectedEntry.revisions[0] ?? null;
+}
+
+export function canReprocessLosslessly(
+  selectedEntry: Pick<ArchiveEntryDetail, "fileKind" | "latestRevisionId" | "revisions"> | null
+) {
+  const detailRevision = resolveDetailRevision(selectedEntry);
+  if (!selectedEntry || !detailRevision) {
+    return false;
+  }
+
+  if (selectedEntry.fileKind === "image") {
+    const extension = detailRevision.sourceArtifact?.extension?.toLowerCase() ?? detailRevision.originalArtifact?.extension?.toLowerCase() ?? "";
+    return LOSSLESS_IMAGE_SOURCE_EXTENSIONS.has(extension);
+  }
+
+  if (selectedEntry.fileKind === "video") {
+    const codec = detailRevision.media.codec?.toLowerCase() ?? "";
+    return LOSSLESS_VIDEO_SOURCE_CODECS.has(codec);
+  }
+
+  return false;
 }

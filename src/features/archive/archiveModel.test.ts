@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AppShellState, ArchiveEntryListItem, DetectedArchive, RecentArchive } from "../../types";
+import type { AppShellState, ArchiveEntryDetail, ArchiveEntryListItem, DetectedArchive, RecentArchive } from "../../types";
 import {
+  ARCHIVE_ENTRY_DRAG_TYPE,
+  canReprocessLosslessly,
   buildFolderTree,
   compareArchiveItems,
   createEntryPageCache,
@@ -10,6 +12,9 @@ import {
   getSelectedSizeTotal,
   getVisibleEntries,
   mergeArchiveItems,
+  isArchiveEntryDrag,
+  isFileDrop,
+  resolveClosestStandardResolutionLabel,
   resolveRangeSelection,
   writeEntryPage
 } from "./archiveModel";
@@ -29,6 +34,51 @@ function makeEntry(overrides: Partial<ArchiveEntryListItem> = {}): ArchiveEntryL
     overrideMode: overrides.overrideMode ?? null,
     previewable: overrides.previewable ?? false,
     childCount: overrides.childCount ?? null
+  };
+}
+
+function makeDetail(overrides: Partial<ArchiveEntryDetail> = {}): ArchiveEntryDetail {
+  const revision = overrides.revisions?.[0] ?? {
+    id: "rev-1",
+    addedAt: "2025-01-01T00:00:00.000Z",
+    source: {
+      relativePath: "example",
+      size: 100
+    },
+    media: {
+      width: 100,
+      height: 100,
+      codec: null
+    },
+    overrideMode: null,
+    summary: "example",
+    actions: [],
+    originalArtifact: {
+      label: "original",
+      extension: ".jpg",
+      mime: "image/jpeg",
+      size: 100,
+      contentHash: "a".repeat(64),
+      chunks: [{ hash: "b".repeat(64), size: 100 }]
+    },
+    optimizedArtifact: null
+  };
+
+  return {
+    id: overrides.id ?? "id",
+    name: overrides.name ?? "example.jpg",
+    relativePath: overrides.relativePath ?? "example.jpg",
+    fileKind: overrides.fileKind ?? "image",
+    mime: overrides.mime ?? "image/jpeg",
+    size: overrides.size ?? 100,
+    sourceSize: overrides.sourceSize ?? 100,
+    createdAt: overrides.createdAt ?? "2025-01-01T00:00:00.000Z",
+    latestRevisionId: overrides.latestRevisionId ?? revision.id,
+    revisions: overrides.revisions ?? [revision],
+    exportableVariants: overrides.exportableVariants ?? {
+      original: true,
+      optimized: false
+    }
   };
 }
 
@@ -117,4 +167,137 @@ test("refresh selection prefers invalidation target then falls back to first fil
   assert.deepEqual([...resolveRefreshSelection(entries, "c").selectedIds], ["c"]);
   assert.deepEqual([...resolveRefreshSelection(entries, "missing").selectedIds], ["b"]);
   assert.equal(resolveRefreshSelection([], null).selectedIds.size, 0);
+});
+
+test("closest standard resolution prefers the nearest common bucket", () => {
+  assert.equal(resolveClosestStandardResolutionLabel(1920, 1080), "1080p");
+  assert.equal(resolveClosestStandardResolutionLabel(2560, 1600), "1440p");
+  assert.equal(resolveClosestStandardResolutionLabel(7680, 4320), "8k");
+});
+
+test("closest standard resolution returns null without dimensions", () => {
+  assert.equal(resolveClosestStandardResolutionLabel(null, 1080), null);
+  assert.equal(resolveClosestStandardResolutionLabel(1920, undefined), null);
+});
+
+test("canReprocessLosslessly hides lossless for lossy sources", () => {
+  assert.equal(
+    canReprocessLosslessly(makeDetail({
+      fileKind: "image",
+      revisions: [{
+        id: "rev-1",
+        addedAt: "2025-01-01T00:00:00.000Z",
+        source: { relativePath: "photo.jpg", size: 100 },
+        media: { width: 100, height: 100, codec: null },
+        overrideMode: "visually_lossless",
+        summary: "example",
+        actions: [],
+        originalArtifact: {
+          label: "original",
+          extension: ".jpg",
+          mime: "image/jpeg",
+          size: 100,
+          contentHash: "a".repeat(64),
+          chunks: [{ hash: "b".repeat(64), size: 100 }]
+        },
+        optimizedArtifact: null
+      }]
+    })),
+    false
+  );
+
+  assert.equal(
+    canReprocessLosslessly(makeDetail({
+      fileKind: "image",
+      revisions: [{
+        id: "rev-2",
+        addedAt: "2025-01-01T00:00:00.000Z",
+        source: { relativePath: "photo.png", size: 100 },
+        media: { width: 100, height: 100, codec: null },
+        overrideMode: "visually_lossless",
+        summary: "example",
+        actions: [],
+        originalArtifact: {
+          label: "original",
+          extension: ".png",
+          mime: "image/png",
+          size: 100,
+          contentHash: "c".repeat(64),
+          chunks: [{ hash: "d".repeat(64), size: 100 }]
+        },
+        optimizedArtifact: null
+      }]
+    })),
+    true
+  );
+});
+
+test("canReprocessLosslessly checks known lossless video codecs", () => {
+  assert.equal(
+    canReprocessLosslessly(makeDetail({
+      fileKind: "video",
+      mime: "video/mp4",
+      revisions: [{
+        id: "rev-3",
+        addedAt: "2025-01-01T00:00:00.000Z",
+        source: { relativePath: "clip.mp4", size: 100 },
+        media: { width: 1920, height: 1080, codec: "h264" },
+        overrideMode: "visually_lossless",
+        summary: "example",
+        actions: [],
+        originalArtifact: {
+          label: "original",
+          extension: ".mp4",
+          mime: "video/mp4",
+          size: 100,
+          contentHash: "e".repeat(64),
+          chunks: [{ hash: "f".repeat(64), size: 100 }]
+        },
+        optimizedArtifact: null
+      }]
+    })),
+    false
+  );
+
+  assert.equal(
+    canReprocessLosslessly(makeDetail({
+      fileKind: "video",
+      mime: "video/x-matroska",
+      revisions: [{
+        id: "rev-4",
+        addedAt: "2025-01-01T00:00:00.000Z",
+        source: { relativePath: "clip.mkv", size: 100 },
+        media: { width: 1920, height: 1080, codec: "ffv1" },
+        overrideMode: "lossless",
+        summary: "example",
+        actions: [],
+        originalArtifact: {
+          label: "original",
+          extension: ".mkv",
+          mime: "video/x-matroska",
+          size: 100,
+          contentHash: "1".repeat(64),
+          chunks: [{ hash: "2".repeat(64), size: 100 }]
+        },
+        optimizedArtifact: null
+      }]
+    })),
+    true
+  );
+});
+
+test("drag source helpers distinguish archive entry moves from file imports", () => {
+  const archiveDrag = {
+    types: [ARCHIVE_ENTRY_DRAG_TYPE],
+    files: []
+  } as unknown as DataTransfer;
+  const fileDrop = {
+    types: ["Files"],
+    files: [{ path: "/tmp/example.png" }]
+  } as unknown as DataTransfer;
+
+  assert.equal(isArchiveEntryDrag(archiveDrag), true);
+  assert.equal(isArchiveEntryDrag(fileDrop), false);
+  assert.equal(isFileDrop(archiveDrag), false);
+  assert.equal(isFileDrop(fileDrop), true);
 });

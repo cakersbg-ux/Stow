@@ -12,7 +12,7 @@ import type {
   Settings
 } from "./types";
 
-type OverrideMode = "lossless" | "visually_lossless";
+type OverrideMode = "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive";
 type ExportVariant = "original" | "optimized";
 
 function createListener<T>(eventName: string, listener: (payload: T) => void) {
@@ -36,6 +36,12 @@ function createListener<T>(eventName: string, listener: (payload: T) => void) {
       detach = null;
     }
   };
+}
+
+function toPreviewSrc(descriptor: PreviewDescriptor) {
+  const fileSrc = convertFileSrc(descriptor.path);
+  const version = encodeURIComponent(descriptor.updatedAt || descriptor.revisionId || "preview");
+  return `${fileSrc}${fileSrc.includes("?") ? "&" : "?"}v=${version}`;
 }
 
 const bridge = {
@@ -99,7 +105,7 @@ const bridge = {
     }
     return {
       ...descriptor,
-      path: convertFileSrc(descriptor.path)
+      path: toPreviewSrc(descriptor)
     };
   },
   onDragDrop: (listener: (payload: { paths: string[]; position: { x: number; y: number } }) => void) =>

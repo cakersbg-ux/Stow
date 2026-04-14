@@ -32,6 +32,7 @@ const {
   parseFolderEntryId
 } = require("./archiveEntryModel");
 const { analyzePath, classifyPath, generatePreviewFile } = require("./mediaTools");
+const { planMediaOptimization } = require("./optimizationPlanner");
 const { ObjectStore } = require("./objectStore");
 const {
   createMetadataStore,
@@ -93,9 +94,91 @@ class ArchiveService {
     this.autoLockTimer = null;
     this.activeSessionOperations = 0;
     this.activeMutationContext = null;
+    this.mutationQueue = Promise.resolve();
+    this.optimizationQueue = Promise.resolve();
     this.previewCache = new PreviewCache({
       baseDir: this.state.previewCachePath
     });
+  }
+
+  getRevisionSourceArtifact(revision) {
+    if (revision?.sourceArtifact) {
+      return revision.sourceArtifact;
+    }
+    if (revision?.originalArtifact && !this.artifactsEquivalent(revision.originalArtifact, revision.preferredArtifact)) {
+      return revision.originalArtifact;
+    }
+    return null;
+  }
+
+  getRevisionPreferredArtifact(revision) {
+    return revision?.preferredArtifact ?? revision?.optimizedArtifact ?? revision?.originalArtifact ?? null;
+  }
+
+  getRevisionDerivativeArtifacts(revision) {
+    return Array.isArray(revision?.derivativeArtifacts) ? revision.derivativeArtifacts : [];
+  }
+
+  artifactSignature(artifact) {
+    if (!artifact) {
+      return null;
+    }
+    return [artifact.contentHash, artifact.size, artifact.label, artifact.extension].join(":");
+  }
+
+  artifactsEquivalent(left, right) {
+    const leftSignature = this.artifactSignature(left);
+    const rightSignature = this.artifactSignature(right);
+    return Boolean(leftSignature && rightSignature && leftSignature === rightSignature);
+  }
+
+  async releaseRevisionArtifacts(revision, exclusions = new Set()) {
+    const session = this.requireArchiveSession();
+    const artifacts = [
+      this.getRevisionSourceArtifact(revision),
+      this.getRevisionPreferredArtifact(revision),
+      ...this.getRevisionDerivativeArtifacts(revision)
+    ].filter(Boolean);
+    const seen = new Set();
+    for (const artifact of artifacts) {
+      const signature = [artifact.contentHash, artifact.size, artifact.label, artifact.extension].join(":");
+      if (seen.has(signature) || exclusions.has(signature)) {
+        continue;
+      }
+      seen.add(signature);
+      await session.objectStore.releaseArtifact(artifact);
+    }
+    await session.objectStore.flushDirtyBuckets();
+  }
+
+  enqueueOptimizationJob(job) {
+    this.optimizationQueue = this.optimizationQueue
+      .then(() => new Promise((resolve) => setTimeout(resolve, 750)))
+      .then(() => this.runOptimizationJob(job))
+      .catch((error) => {
+        this.pushLog(`optimization queue error: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    return this.optimizationQueue;
+  }
+
+  async withMutationQueue(task) {
+    const previous = this.mutationQueue;
+    let release = null;
+    this.mutationQueue = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await task();
+    } finally {
+      if (release) {
+        release();
+      }
+    }
+  }
+
+  async waitForOptimizationQueue() {
+    await this.optimizationQueue;
   }
 
   async initialize() {
@@ -116,9 +199,10 @@ class ArchiveService {
 
   async cacheRevisionPreviews(entryId, revisionId, fileKind, sourcePath) {
     if (!sourcePath || !["image", "video"].includes(fileKind)) {
-      return;
+      return false;
     }
 
+    let cachedAny = false;
     try {
       for (const kind of PREVIEW_KINDS) {
         const key = this.previewKey(entryId, revisionId, kind);
@@ -133,14 +217,17 @@ class ArchiveService {
           path: preview.path,
           mime: preview.mime,
           revisionId,
-          kind
+          kind,
+          updatedAt: new Date().toISOString()
         });
+        cachedAny = true;
       }
     } catch (error) {
       this.pushLog(
         `failed to cache previews for revision ${revisionId}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
+    return cachedAny;
   }
 
   async deleteEntryPreviewArtifacts(entry) {
@@ -553,61 +640,63 @@ class ArchiveService {
     commitWhen = null,
     trackEntryCatalogs = true
   }) {
-    const context = this.createMutationContext({ trackEntryCatalogs });
-    const metadataTransaction = await context.session.metadataStore.begin({
-      rootSnapshot: context.rootSnapshot
-    });
-    const previousMutationContext = this.activeMutationContext;
-    this.activeMutationContext = context;
-    try {
-      await this.persistPendingMutationJournal(context, { force: true });
-      const transaction = createArchiveMutationTransaction({
-        captureSnapshot: async () => context.rootSnapshot,
-        restoreSnapshot: async () => {
-          await context.session.metadataStore.rollback(metadataTransaction).catch(() => {});
-          await this.rollbackMutationContext(context, null, rollback);
-        },
-        commitBoundary: async ({ result }) => {
-          if (!this.shouldCommitMutationResult(result, commitWhen, context)) {
-            return;
-          }
-          if (context.journalEnabled) {
-            const committedAt = new Date().toISOString();
-            context.session.root.updatedAt = committedAt;
-            context.targetRootUpdatedAt = committedAt;
-            context.targetRootDigest = hashMutationJournalRoot(context.session.root);
-            context.journalDirty = true;
-            await this.persistPendingMutationJournal(context, { force: true });
-            await this.persistRoot({ updatedAt: committedAt });
-          } else {
-            await this.persistRoot();
-          }
-          context.committed = true;
-          if (context.journalEnabled) {
-            await this.clearMutationJournal(context).catch((error) => {
-              const message = error instanceof Error ? error.message : String(error);
-              this.pushLog(`failed to clear metadata mutation journal: ${message}`);
-            });
-          }
-        }
+    return this.withMutationQueue(async () => {
+      const context = this.createMutationContext({ trackEntryCatalogs });
+      const metadataTransaction = await context.session.metadataStore.begin({
+        rootSnapshot: context.rootSnapshot
       });
-      const result = await transaction.run(async () => mutate(context));
-      if (context.journalEnabled && !context.committed) {
-        await this.clearMutationJournal(context).catch(() => {});
+      const previousMutationContext = this.activeMutationContext;
+      this.activeMutationContext = context;
+      try {
+        await this.persistPendingMutationJournal(context, { force: true });
+        const transaction = createArchiveMutationTransaction({
+          captureSnapshot: async () => context.rootSnapshot,
+          restoreSnapshot: async () => {
+            await context.session.metadataStore.rollback(metadataTransaction).catch(() => {});
+            await this.rollbackMutationContext(context, null, rollback);
+          },
+          commitBoundary: async ({ result }) => {
+            if (!this.shouldCommitMutationResult(result, commitWhen, context)) {
+              return;
+            }
+            if (context.journalEnabled) {
+              const committedAt = new Date().toISOString();
+              context.session.root.updatedAt = committedAt;
+              context.targetRootUpdatedAt = committedAt;
+              context.targetRootDigest = hashMutationJournalRoot(context.session.root);
+              context.journalDirty = true;
+              await this.persistPendingMutationJournal(context, { force: true });
+              await this.persistRoot({ updatedAt: committedAt });
+            } else {
+              await this.persistRoot();
+            }
+            context.committed = true;
+            if (context.journalEnabled) {
+              await this.clearMutationJournal(context).catch((error) => {
+                const message = error instanceof Error ? error.message : String(error);
+                this.pushLog(`failed to clear metadata mutation journal: ${message}`);
+              });
+            }
+          }
+        });
+        const result = await transaction.run(async () => mutate(context));
+        if (context.journalEnabled && !context.committed) {
+          await this.clearMutationJournal(context).catch(() => {});
+        }
+        if (context.committed && typeof afterCommit === "function") {
+          await afterCommit(result, context);
+        }
+        return result;
+      } catch (error) {
+        if (context.journalEnabled && context.snapshotRestored) {
+          await this.clearMutationJournal(context).catch(() => {});
+        }
+        throw error;
+      } finally {
+        await context.session.metadataStore.rollback(metadataTransaction).catch(() => {});
+        this.activeMutationContext = previousMutationContext;
       }
-      if (context.committed && typeof afterCommit === "function") {
-        await afterCommit(result, context);
-      }
-      return result;
-    } catch (error) {
-      if (context.journalEnabled && context.snapshotRestored) {
-        await this.clearMutationJournal(context).catch(() => {});
-      }
-      throw error;
-    } finally {
-      await context.session.metadataStore.rollback(metadataTransaction).catch(() => {});
-      this.activeMutationContext = previousMutationContext;
-    }
+    });
   }
 
   async rollbackIngestMutation(rootSnapshot, mutation) {
@@ -619,8 +708,7 @@ class ArchiveService {
           continue;
         }
         await this.deleteRevisionPreviewArtifacts(mutation.afterEntry.id, revision.id);
-        await session.objectStore.releaseArtifact(revision.originalArtifact);
-        await session.objectStore.releaseArtifact(revision.optimizedArtifact);
+        await this.releaseRevisionArtifacts(revision);
       }
       await writeEntryCatalog(session.path, session.archiveKey, mutation.beforeEntry);
     } else if (mutation?.afterEntry) {
@@ -645,8 +733,7 @@ class ArchiveService {
             continue;
           }
           await this.deleteRevisionPreviewArtifacts(mutation.afterEntry.id, revision.id);
-          await session.objectStore.releaseArtifact(revision.originalArtifact);
-          await session.objectStore.releaseArtifact(revision.optimizedArtifact);
+          await this.releaseRevisionArtifacts(revision);
         }
         await writeEntryCatalog(session.path, session.archiveKey, mutation.beforeEntry);
         continue;
@@ -878,6 +965,75 @@ class ArchiveService {
     session.metadataStore = createMetadataStore(session);
     session.objectStore = new ObjectStore(session, this.state.capabilities);
     return session;
+  }
+
+  async migrateStoredArtifactsToProcessedVariants() {
+    const session = this.requireArchiveSession();
+    let migratedEntries = 0;
+
+    for (const entryId of session.root.entryOrder) {
+      const entry = await this.loadEntry(entryId);
+      if (!entry?.revisions?.length) {
+        continue;
+      }
+
+      let entryChanged = false;
+      const artifactsToRelease = [];
+      for (const revision of entry.revisions) {
+        if (!revision) {
+          continue;
+        }
+        const legacyOriginalArtifact =
+          revision.originalArtifact && revision.preferredArtifact && !revision.sourceArtifact && !this.artifactsEquivalent(revision.originalArtifact, revision.preferredArtifact)
+            ? revision.originalArtifact
+            : null;
+        if (revision.optimizedArtifact && !revision.preferredArtifact) {
+          revision.preferredArtifact = revision.optimizedArtifact;
+          revision.optimizedArtifact = null;
+          revision.optimizationState = revision.optimizationState || "optimized";
+          entryChanged = true;
+        }
+        if (Array.isArray(revision.derivativeArtifacts) && revision.derivativeArtifacts.length > 0 && !revision.preferredArtifact) {
+          revision.preferredArtifact = revision.derivativeArtifacts[0];
+          entryChanged = true;
+        }
+        if (revision.preferredArtifact && !revision.originalArtifact) {
+          revision.originalArtifact = revision.sourceArtifact || null;
+          entryChanged = true;
+        }
+        if (legacyOriginalArtifact) {
+          artifactsToRelease.push(legacyOriginalArtifact);
+        }
+        if (
+          revision.preferredArtifact &&
+          !revision.optimizedArtifact &&
+          revision.sourceArtifact &&
+          revision.preferredArtifact !== revision.sourceArtifact
+        ) {
+          revision.optimizedArtifact = revision.preferredArtifact;
+          entryChanged = true;
+        }
+      }
+
+      if (entryChanged) {
+        await this.saveEntry(entry);
+        migratedEntries += 1;
+      }
+      if (artifactsToRelease.length > 0) {
+        for (const artifact of artifactsToRelease) {
+          await session.objectStore.releaseArtifact(artifact);
+        }
+        await session.objectStore.flushDirtyBuckets();
+      }
+    }
+
+    if (migratedEntries > 0) {
+      await session.objectStore.flushDirtyBuckets();
+      this.pushLog(`migrated ${migratedEntries} entr${migratedEntries === 1 ? "y" : "ies"} to stored processed artifacts`);
+      await this.persistRoot();
+    }
+
+    return migratedEntries;
   }
 
   async persistRoot(options = {}) {
@@ -1511,6 +1667,17 @@ class ArchiveService {
       root
     );
     await this.state.archiveSession.objectStore.reconcileStorage();
+    await this.executeMutationTransaction({
+      trackEntryCatalogs: true,
+      mutate: async () => {
+        const migratedEntries = await this.migrateStoredArtifactsToProcessedVariants();
+        return { changed: migratedEntries > 0 };
+      },
+      commitWhen: (result) => Boolean(result?.changed)
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.pushLog(`failed to normalize stored artifacts on open: ${message}`);
+    });
     await this.initializeQueryIndexForSession();
     this.initializeArchiveSessionTimer();
     await this.trackRecentArchive(archivePath, root.name);
@@ -1677,33 +1844,18 @@ class ArchiveService {
     const entryId = existingEntryId || collidingEntryId || uuid();
     const preferences = {
       ...session.root.preferences,
-      ...(overrideMode ? { optimizationMode: overrideMode } : {})
+      ...(overrideMode ? { optimizationTier: overrideMode, optimizationMode: overrideMode } : {})
     };
-    const analysis = await analyzePath(absolutePath, preferences, this.state.capabilities, tempDir);
+    const analysis = await analyzePath(absolutePath, preferences, this.state.capabilities, tempDir, { optimize: false });
     const stats = await fs.stat(absolutePath);
     const revisionId = uuid();
+    const storedArtifact = await session.objectStore.storeFile(absolutePath, session.root.preferences.compressionBehavior, {
+      extension: analysis.original.extension,
+      mime: analysis.original.mime
+    });
+    const optimizationTier = preferences.optimizationTier || preferences.optimizationMode || "visually_lossless";
 
-    const originalArtifact = await session.objectStore.storeFile(
-      analysis.original.path,
-      session.root.preferences.compressionBehavior,
-      {
-        extension: analysis.original.extension,
-        mime: analysis.original.mime
-      }
-    );
-
-    let derivativeArtifact = null;
-    if (analysis.derivative?.path) {
-      derivativeArtifact = await session.objectStore.storeFile(
-        analysis.derivative.path,
-        session.root.preferences.compressionBehavior,
-        {
-          extension: analysis.derivative.extension,
-          mime: analysis.derivative.mime
-        }
-      );
-    }
-
+    const optimizationState = analysis.kind === "file" ? "optimized" : "pending_optimization";
     const nextRevision = {
       id: revisionId,
       addedAt: new Date().toISOString(),
@@ -1717,31 +1869,38 @@ class ArchiveService {
         codec: analysis.original.codec || null
       },
       overrideMode: overrideMode || null,
+      optimizationTier,
+      artifactRetentionPolicy: optimizationTier === "lossless" ? "keep_source" : "drop_source_after_optimize",
+      optimizationState,
+      optimizationDecision: null,
       summary: analysis.summary,
       actions: [
         overrideMode ? `per-file override ${overrideMode}` : "used archive defaults",
         collidingEntryId ? "path collision policy stored a new revision for the existing archive path" : "created archive file-tree entry",
-        "preserved original",
+        "stored baseline artifact",
         ...analysis.actions,
-        ...this.buildStorageActions("original", originalArtifact),
-        ...(derivativeArtifact ? this.buildStorageActions("optimized", derivativeArtifact) : ["optimized: no derivative stored"]),
-        derivativeArtifact ? "stored optimized derivative" : "no optimized derivative"
+        ...this.buildStorageActions("stored", storedArtifact)
       ],
-      originalArtifact: {
-        label: "original",
+      sourceArtifact: {
+        label: "source",
         extension: analysis.original.extension,
         mime: analysis.original.mime,
-        ...originalArtifact
+        ...storedArtifact
       },
-      optimizedArtifact: derivativeArtifact
-        ? {
-            label: analysis.derivative.label,
-            extension: analysis.derivative.extension,
-            mime: analysis.derivative.mime,
-            actions: analysis.derivative.actions,
-            ...derivativeArtifact
-          }
-        : null
+      preferredArtifact: {
+        label: "source",
+        extension: analysis.original.extension,
+        mime: analysis.original.mime,
+        ...storedArtifact
+      },
+      derivativeArtifacts: [],
+      originalArtifact: {
+        label: "source",
+        extension: analysis.original.extension,
+        mime: analysis.original.mime,
+        ...storedArtifact
+      },
+      optimizedArtifact: null
     };
 
     if (entryId !== null && (existingEntryId || collidingEntryId)) {
@@ -1763,6 +1922,13 @@ class ArchiveService {
           ? `reprocessed ${normalizedRelativePath} with override ${overrideMode}`
           : `ingested ${normalizedRelativePath} as a new revision for the existing archive path`
       );
+      if (analysis.kind !== "file") {
+        this.enqueueOptimizationJob({
+          entryId: existingEntry.id,
+          revisionId,
+          workLabel: existingEntryId ? "reprocess" : "ingest"
+        });
+      }
       return existingEntry.id;
     }
 
@@ -1783,7 +1949,217 @@ class ArchiveService {
     await this.saveEntry(entry);
     await this.cacheRevisionPreviews(entryId, revisionId, analysis.kind, analysis.previewSourcePath || analysis.original.path);
     this.pushLog(`ingested ${normalizedRelativePath} (${analysis.kind})`);
+    if (analysis.kind !== "file") {
+      this.enqueueOptimizationJob({
+        entryId,
+        revisionId,
+        workLabel: "ingest"
+      });
+    }
     return entryId;
+  }
+
+  async runOptimizationJob(job) {
+    const session = this.requireArchiveSession();
+    const { entryId, revisionId, workLabel } = job;
+    let finalArtifactDescriptor = null;
+    let sourceArtifactDescriptor = null;
+    let selectedCandidateDescriptor = null;
+    let optimizationPlan = null;
+    let expectedLatestRevisionId = null;
+    let abortOptimization = false;
+
+    await this.executeMutationTransaction({
+      trackEntryCatalogs: true,
+      mutate: async () => {
+        const entry = await this.loadEntry(entryId);
+        if (!entry) {
+          return { changed: false };
+        }
+
+        const revision = entry.revisions.find((candidate) => candidate.id === revisionId);
+        if (!revision || revision.optimizationState === "optimized") {
+          return { changed: false };
+        }
+
+        sourceArtifactDescriptor = this.getRevisionSourceArtifact(revision) || this.getRevisionPreferredArtifact(revision);
+        if (!sourceArtifactDescriptor) {
+          revision.optimizationState = "failed";
+          revision.actions = [...revision.actions, "planner: no stored source artifact was available"];
+          await this.saveEntry(entry);
+          return { changed: true, selectedEntryId: entry.id };
+        }
+        expectedLatestRevisionId = entry.latestRevisionId;
+
+        const sourceTempPath = await session.objectStore.materializeObjectToTempPath(
+          sourceArtifactDescriptor,
+          sourceArtifactDescriptor.extension || path.extname(entry.name),
+          "stow-optimization-source-"
+        );
+
+        try {
+          await withTempDir("stow-optimization-plan-", async (tempDir) => {
+            optimizationPlan = await planMediaOptimization(
+              sourceTempPath,
+              {
+                kind: entry.fileKind,
+                summary: revision.summary,
+                codec: revision.media?.codec || null
+              },
+              session.root.preferences,
+              this.state.capabilities,
+              tempDir
+            );
+
+            const latestEntryBeforeStore = await this.loadEntry(entryId);
+            const latestRevisionBeforeStore = latestEntryBeforeStore?.revisions?.find((candidate) => candidate.id === revisionId) || null;
+            if (
+              !latestEntryBeforeStore ||
+              latestEntryBeforeStore.latestRevisionId !== expectedLatestRevisionId ||
+              !latestRevisionBeforeStore ||
+              latestRevisionBeforeStore.optimizationState !== "pending_optimization"
+            ) {
+              abortOptimization = true;
+              return;
+            }
+
+            if (optimizationPlan.selectedCandidate) {
+              selectedCandidateDescriptor = await session.objectStore.storeFile(
+                optimizationPlan.selectedCandidate.path,
+                session.root.preferences.compressionBehavior,
+                {
+                  extension: optimizationPlan.selectedCandidate.extension,
+                  mime: optimizationPlan.selectedCandidate.mime
+                }
+              );
+              finalArtifactDescriptor = {
+                label: optimizationPlan.selectedCandidate.label,
+                extension: optimizationPlan.selectedCandidate.extension,
+                mime: optimizationPlan.selectedCandidate.mime,
+                ...selectedCandidateDescriptor
+              };
+            } else {
+              finalArtifactDescriptor = sourceArtifactDescriptor;
+            }
+
+            const latestEntry = await this.loadEntry(entryId);
+            const latestRevision = latestEntry?.revisions?.find((candidate) => candidate.id === revisionId) || null;
+            if (
+              !latestEntry ||
+              latestEntry.latestRevisionId !== expectedLatestRevisionId ||
+              !latestRevision ||
+              latestRevision.optimizationState !== "pending_optimization"
+            ) {
+              abortOptimization = true;
+              if (selectedCandidateDescriptor) {
+                await session.objectStore.releaseArtifact(selectedCandidateDescriptor);
+                await session.objectStore.flushDirtyBuckets();
+                selectedCandidateDescriptor = null;
+              }
+              optimizationPlan = null;
+              finalArtifactDescriptor = null;
+              return;
+            }
+
+            const retentionPolicy = optimizationPlan.artifactRetentionPolicy || revision.artifactRetentionPolicy || "keep_source";
+            const keepSource = retentionPolicy === "keep_source" || !optimizationPlan.selectedCandidate;
+            const newDerivativeArtifacts = selectedCandidateDescriptor
+              ? [
+                  {
+                    label: optimizationPlan.selectedCandidate.label,
+                    extension: optimizationPlan.selectedCandidate.extension,
+                    mime: optimizationPlan.selectedCandidate.mime,
+                    ...selectedCandidateDescriptor
+                  }
+                ]
+              : [];
+            const previousPreferred = this.getRevisionPreferredArtifact(revision);
+
+            revision.sourceArtifact = keepSource
+              ? {
+                  label: "source",
+                  extension: sourceArtifactDescriptor.extension,
+                  mime: sourceArtifactDescriptor.mime,
+                  ...sourceArtifactDescriptor
+                }
+              : null;
+            revision.preferredArtifact = finalArtifactDescriptor;
+            revision.derivativeArtifacts = newDerivativeArtifacts;
+            revision.originalArtifact = revision.sourceArtifact || null;
+            revision.optimizedArtifact =
+              revision.sourceArtifact && revision.preferredArtifact && revision.preferredArtifact !== revision.sourceArtifact
+                ? revision.preferredArtifact
+                : null;
+            revision.artifactRetentionPolicy = retentionPolicy;
+            revision.optimizationTier = optimizationPlan.tier || revision.optimizationTier || revision.overrideMode || "visually_lossless";
+            revision.optimizationState = "optimized";
+            revision.optimizationDecision = {
+              plannerVersion: "planner-v1",
+              selectedCandidateId: optimizationPlan.selectedCandidate?.id || null,
+              candidateMetrics: optimizationPlan.candidateMetrics || [],
+              sourceSummary: optimizationPlan.sourceSummary || revision.summary
+            };
+            revision.actions = [
+              ...revision.actions.filter((action) => !action.startsWith("planner:")),
+              ...(optimizationPlan.actions || []).map((action) => `planner: ${action}`),
+              optimizationPlan.selectedCandidate ? `planner selected ${optimizationPlan.selectedCandidate.label}` : "planner kept source artifact"
+            ];
+
+            await this.saveEntry(entry);
+
+            if (
+              previousPreferred &&
+              !this.artifactsEquivalent(previousPreferred, sourceArtifactDescriptor) &&
+              !this.artifactsEquivalent(previousPreferred, finalArtifactDescriptor)
+            ) {
+              await session.objectStore.releaseArtifact(previousPreferred);
+            }
+            if (!keepSource && sourceArtifactDescriptor) {
+              await session.objectStore.releaseArtifact(sourceArtifactDescriptor);
+            }
+            await session.objectStore.flushDirtyBuckets();
+
+            const previewSourceCandidates = [...new Set([optimizationPlan?.previewSourcePath, sourceTempPath].filter(Boolean))];
+            for (const previewSourcePath of previewSourceCandidates) {
+              const cachedPreview = await this.cacheRevisionPreviews(entry.id, revision.id, entry.fileKind, previewSourcePath);
+              if (cachedPreview) {
+                break;
+              }
+            }
+          });
+        } finally {
+          await fs.rm(path.dirname(sourceTempPath), { recursive: true, force: true }).catch(() => {});
+        }
+
+        if (abortOptimization) {
+          return { changed: false };
+        }
+
+        return { changed: true, selectedEntryId: entry.id };
+      },
+      afterCommit: async (result) => {
+        if (result?.changed) {
+          this.emitEntriesInvalidated({
+            archiveId: session.root.archiveId,
+            reason: workLabel === "reprocess" ? "reprocess-optimization" : "ingest-optimization",
+            selectedEntryId: result.selectedEntryId || null
+          });
+        }
+      }
+    }).catch(async (error) => {
+      this.pushLog(`optimization job failed: ${error instanceof Error ? error.message : String(error)}`);
+      try {
+        const entry = await this.loadEntry(entryId);
+        const revision = entry?.revisions?.find((candidate) => candidate.id === revisionId) || null;
+        if (revision && revision.optimizationState === "pending_optimization") {
+          revision.optimizationState = "failed";
+          revision.actions = [...revision.actions, "planner: optimization failed"];
+          await this.saveEntry(entry);
+        }
+      } catch (_error) {
+        // Preserve the original failure; best-effort state repair only.
+      }
+    });
   }
 
   async listEntries({ directory = "", offset = 0, limit = 100, sortColumn = "name", sortDirection = "asc" }) {
@@ -1824,7 +2200,10 @@ class ArchiveService {
       }
       const revision = entry.revisions.find((candidate) => candidate.id === entry.latestRevisionId);
       const descriptor =
-        variant === "optimized" && revision.optimizedArtifact ? revision.optimizedArtifact : revision.originalArtifact;
+        variant === "optimized" ? this.getRevisionPreferredArtifact(revision) : this.getRevisionSourceArtifact(revision);
+      if (!descriptor) {
+        throw new Error("Requested artifact variant is not available");
+      }
       const safeName = entry.name.replace(path.extname(entry.name), "");
       const extension = descriptor.extension || path.extname(entry.name);
       const exportPath = path.join(destination, `${safeName}${variant === "optimized" ? "-optimized" : "-original"}${extension}`);
@@ -1849,7 +2228,10 @@ class ArchiveService {
         throw new Error("Revision not found");
       }
 
-      const descriptor = revision.originalArtifact;
+      const descriptor = this.getRevisionPreferredArtifact(revision) || this.getRevisionSourceArtifact(revision);
+      if (!descriptor) {
+        throw new Error("Requested artifact variant is not available");
+      }
       const openRoot = path.join(this.state.runtimeTempPath, OPEN_TEMP_DIRNAME, session.root.archiveId);
       await ensureDir(openRoot);
       const outputPath = path.join(openRoot, `${uuid()}-${entryFileName(entry, descriptor)}`);
@@ -1890,31 +2272,43 @@ class ArchiveService {
         return cached;
       }
 
-      const descriptor = await withTempDir("stow-preview-source-", async (tempDir) => {
-        const previewArtifact =
-          previewFileKind === "video" && revision.optimizedArtifact ? revision.optimizedArtifact : revision.originalArtifact;
-        const sourcePath = await session.objectStore.materializeObjectToTempPath(
-          previewArtifact,
-          previewArtifact.extension || path.extname(entry.name),
-          "stow-preview-materialized-"
-        );
-        try {
-          const outputDir = this.previewCache.previewDir(key);
-          await ensureDir(outputDir);
-          const preview = await generatePreviewFile(sourcePath, previewFileKind, previewKind, outputDir, this.state.capabilities);
-          if (!preview) {
-            return null;
-          }
-
-          return this.previewCache.writeDescriptor(key, {
-            path: preview.path,
-            mime: preview.mime,
-            revisionId: revision.id,
-            kind: previewKind
-          });
-        } finally {
-          await fs.rm(path.dirname(sourcePath), { recursive: true, force: true }).catch(() => {});
+      const descriptor = await withTempDir("stow-preview-source-", async (_tempDir) => {
+        const previewArtifacts = [];
+        const preferredArtifact = this.getRevisionPreferredArtifact(revision);
+        const sourceArtifact = this.getRevisionSourceArtifact(revision);
+        if (preferredArtifact) {
+          previewArtifacts.push(preferredArtifact);
         }
+        if (sourceArtifact && !previewArtifacts.some((candidate) => this.artifactsEquivalent(candidate, sourceArtifact))) {
+          previewArtifacts.push(sourceArtifact);
+        }
+
+        for (const previewArtifact of previewArtifacts) {
+          const sourcePath = await session.objectStore.materializeObjectToTempPath(
+            previewArtifact,
+            previewArtifact.extension || path.extname(entry.name),
+            "stow-preview-materialized-"
+          );
+          try {
+            const outputDir = this.previewCache.previewDir(key);
+            await ensureDir(outputDir);
+            const preview = await generatePreviewFile(sourcePath, previewFileKind, previewKind, outputDir, this.state.capabilities);
+            if (!preview) {
+              continue;
+            }
+
+            return this.previewCache.writeDescriptor(key, {
+              path: preview.path,
+              mime: preview.mime,
+              revisionId: revision.id,
+              kind: previewKind,
+              updatedAt: new Date().toISOString()
+            });
+          } finally {
+            await fs.rm(path.dirname(sourcePath), { recursive: true, force: true }).catch(() => {});
+          }
+        }
+        return null;
       });
 
       return descriptor;
@@ -1939,13 +2333,14 @@ class ArchiveService {
         trackEntryCatalogs: false,
         mutate: async () => {
           const latestRevision = entry.revisions.find((candidate) => candidate.id === entry.latestRevisionId) ?? entry.revisions[0];
-          if (!latestRevision?.originalArtifact) {
-            throw new Error("Original stored artifact is not available for reprocessing");
+          const sourceArtifact = this.getRevisionSourceArtifact(latestRevision) || this.getRevisionPreferredArtifact(latestRevision);
+          if (!sourceArtifact) {
+            throw new Error("Stored artifact is not available for reprocessing");
           }
 
           const materializedSourcePath = await session.objectStore.materializeObjectToTempPath(
-            latestRevision.originalArtifact,
-            latestRevision.originalArtifact.extension || path.extname(entry.name),
+            sourceArtifact,
+            sourceArtifact.extension || path.extname(entry.name),
             "stow-reprocess-source-"
           );
           try {
@@ -2140,8 +2535,10 @@ class ArchiveService {
         if (!revision) {
           continue;
         }
-        const descriptor =
-          variant === "optimized" && revision.optimizedArtifact ? revision.optimizedArtifact : revision.originalArtifact;
+        const descriptor = variant === "optimized" ? this.getRevisionPreferredArtifact(revision) : this.getRevisionSourceArtifact(revision);
+        if (!descriptor) {
+          continue;
+        }
         const safeName = entry.name.replace(path.extname(entry.name), "");
         const extension = descriptor.extension || path.extname(entry.name);
         const exportPath = path.join(destination, `${safeName}${variant === "optimized" ? "-optimized" : "-original"}${extension}`);

@@ -75,6 +75,7 @@ class PreviewCache {
       const raw = await fs.readFile(metadataPath, "utf8");
       const descriptor = JSON.parse(raw);
       const stat = await fs.stat(descriptor.path);
+      const metadataStat = await fs.stat(metadataPath).catch(() => null);
       if (Date.now() - stat.mtimeMs > this.maxAgeMs) {
         await this.deletePreviewDir(key);
         return null;
@@ -82,7 +83,12 @@ class PreviewCache {
       const now = new Date();
       await fs.utimes(descriptor.path, now, now).catch(() => {});
       await fs.utimes(metadataPath, now, now).catch(() => {});
-      return descriptor;
+      return {
+        ...descriptor,
+        updatedAt:
+          descriptor.updatedAt ||
+          new Date(Math.max(stat.mtimeMs, metadataStat?.mtimeMs ?? stat.mtimeMs)).toISOString()
+      };
     } catch (_error) {
       await this.deletePreviewDir(key);
       return null;

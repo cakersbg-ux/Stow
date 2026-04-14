@@ -92,27 +92,11 @@ async function runCommand(command, args, inputBuffer) {
   }
 }
 
-function shouldCompressArtifact(sourcePath, options = {}) {
-  const extension = (options.extension || path.extname(sourcePath)).toLowerCase();
-  const mime = (options.mime || "").toLowerCase();
-
-  if (PRECOMPRESSED_EXTENSIONS.has(extension)) {
-    return false;
-  }
-  if (mime.startsWith("video/") || mime.startsWith("audio/")) {
-    return false;
-  }
-  if (mime.startsWith("image/")) {
-    return false;
-  }
-  return true;
-}
-
 async function compressBuffer(buffer, behavior, capabilities, options = {}) {
   const safeCapabilities = capabilities || {};
   const lzmaCommand = safeCapabilities.lzma2Offline?.path || "7z";
   const zstdCommand = safeCapabilities.zstd?.path || "zstd";
-  if (options.compressible === false || buffer.length < 64 * 1024) {
+  if (buffer.length < 64 * 1024) {
     return { buffer, compression: { algorithm: "none", level: 0 } };
   }
   if (behavior === "max" && safeCapabilities.lzma2Offline?.available) {
@@ -225,7 +209,8 @@ class ObjectStore {
     let storedBytes = 0;
     let totalSize = 0;
     const contentHash = crypto.createHash("sha256");
-    const compressible = shouldCompressArtifact(sourcePath, options);
+    let compressionBehavior = behavior;
+    let compressionDisabled = false;
 
     for await (const chunk of chunkFile(sourcePath)) {
       const prefix = chunk.hash.slice(0, 2);
@@ -236,7 +221,22 @@ class ObjectStore {
       totalSize += chunk.buffer.length;
 
       if (!object) {
-        const compressed = await compressBuffer(chunk.buffer, behavior, this.capabilities, { compressible });
+        let compressed;
+        if (compressionDisabled) {
+          compressed = { buffer: chunk.buffer, compression: { algorithm: "none", level: 0 } };
+        } else {
+          compressed = await compressBuffer(chunk.buffer, compressionBehavior, this.capabilities, options);
+          if (newChunks === 0) {
+            const savings = chunk.buffer.length > 0 ? 1 - compressed.buffer.length / chunk.buffer.length : 0;
+            if (savings < 0.015) {
+              compressionDisabled = true;
+              compressionBehavior = "none";
+              compressed = { buffer: chunk.buffer, compression: { algorithm: "none", level: 0 } };
+            } else if (compressionBehavior === "max" && savings < 0.05 && this.capabilities?.zstd?.available) {
+              compressionBehavior = "balanced";
+            }
+          }
+        }
         const encrypted = await encryptPayload(compressed.buffer, this.session.archiveKey);
         const storageId = createStorageId();
         await this.stageObjectWrite(storageId, encrypted.ciphertext);
@@ -372,9 +372,25 @@ class ObjectStore {
   }
 
   async releaseEntry(entry) {
+    const releasedArtifacts = new Set();
+    const releaseOnce = async (descriptor) => {
+      if (!descriptor) {
+        return;
+      }
+      const signature = [descriptor.contentHash, descriptor.size, descriptor.label, descriptor.extension].join(":");
+      if (releasedArtifacts.has(signature)) {
+        return;
+      }
+      releasedArtifacts.add(signature);
+      await this.releaseArtifact(descriptor);
+    };
+
     for (const revision of entry.revisions || []) {
-      await this.releaseArtifact(revision.originalArtifact);
-      await this.releaseArtifact(revision.optimizedArtifact);
+      await releaseOnce(revision.sourceArtifact || revision.originalArtifact);
+      await releaseOnce(revision.preferredArtifact || revision.optimizedArtifact);
+      for (const artifact of revision.derivativeArtifacts || []) {
+        await releaseOnce(artifact);
+      }
     }
     await this.flushDirtyBuckets();
   }

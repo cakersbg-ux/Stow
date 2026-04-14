@@ -11,7 +11,8 @@ const DEFAULT_SETTINGS = {
   preferredArchiveRoot: "",
   themePreference: "system",
   sessionIdleMinutes: 0,
-  sessionLockOnHide: false
+  sessionLockOnHide: false,
+  developerActivityLogEnabled: false
 };
 const SUPPORTED_MANIFEST_VERSION = 3;
 const ARGON_PROFILES = new Set(["balanced", "strong", "constrained"]);
@@ -408,6 +409,7 @@ function normalizeSettings(nextSettings, defaultArchiveRoot) {
   const archivePreferences = normalizeArchivePreferences(source);
   return {
     ...archivePreferences,
+    optimizationMode: archivePreferences.optimizationTier,
     deleteOriginalFilesAfterSuccessfulUpload: normalizeBoolean(
       source.deleteOriginalFilesAfterSuccessfulUpload,
       DEFAULT_SETTINGS.deleteOriginalFilesAfterSuccessfulUpload
@@ -422,7 +424,11 @@ function normalizeSettings(nextSettings, defaultArchiveRoot) {
         ? source.themePreference
         : DEFAULT_SETTINGS.themePreference,
     sessionIdleMinutes: normalizeInteger(source.sessionIdleMinutes, DEFAULT_SETTINGS.sessionIdleMinutes, 0),
-    sessionLockOnHide: normalizeBoolean(source.sessionLockOnHide, DEFAULT_SETTINGS.sessionLockOnHide)
+    sessionLockOnHide: normalizeBoolean(source.sessionLockOnHide, DEFAULT_SETTINGS.sessionLockOnHide),
+    developerActivityLogEnabled: normalizeBoolean(
+      source.developerActivityLogEnabled,
+      DEFAULT_SETTINGS.developerActivityLogEnabled
+    )
   };
 }
 

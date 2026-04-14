@@ -1078,6 +1078,119 @@ test("archive service stores one file-tree entry per relative path and reprocess
   }
 });
 
+test("archive service normalizes legacy revisions to keep only the stored artifact", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-service-test-migrate-artifacts-"));
+  try {
+    const state = await createInitialState(path.join(tempDir, "user-data"), tempDir);
+    state.settings.deleteOriginalFilesAfterSuccessfulUpload = false;
+    state.installStatus = {
+      active: false,
+      phase: "complete",
+      message: "ready",
+      currentTarget: null,
+      completedSteps: 1,
+      totalSteps: 1,
+      installed: [],
+      skipped: []
+    };
+
+    const service = new ArchiveService(state, createEmitters());
+    await service.initialize();
+
+    await service.createArchive({
+      parentPath: tempDir,
+      name: "migrate-demo",
+      password: "password",
+      preferences: state.settings
+    });
+
+    const sourcePath = path.join(tempDir, "source.txt");
+    const processedPath = path.join(tempDir, "processed.txt");
+    await fs.writeFile(sourcePath, "source bytes that should not survive migration");
+    await fs.writeFile(processedPath, "processed bytes that remain stored");
+
+    const session = state.archiveSession;
+    const originalArtifact = await session.objectStore.storeFile(
+      sourcePath,
+      session.root.preferences.compressionBehavior,
+      {
+        extension: ".txt",
+        mime: "text/plain"
+      }
+    );
+    const optimizedArtifact = await session.objectStore.storeFile(
+      processedPath,
+      session.root.preferences.compressionBehavior,
+      {
+        extension: ".txt",
+        mime: "text/plain"
+      }
+    );
+
+    const entryId = "123e4567-e89b-42d3-a456-426614174010";
+    const revisionId = "123e4567-e89b-42d3-a456-426614174011";
+    const sourceSize = Buffer.byteLength("source bytes that should not survive migration");
+    const entry = {
+      id: entryId,
+      name: "source.txt",
+      relativePath: "source.txt",
+      fileKind: "file",
+      mime: "text/plain",
+      size: sourceSize,
+      createdAt: new Date().toISOString(),
+      latestRevisionId: revisionId,
+      revisions: [{
+        id: revisionId,
+        addedAt: new Date().toISOString(),
+        source: {
+          relativePath: "source.txt",
+          size: sourceSize
+        },
+        media: {},
+        overrideMode: null,
+        summary: "example",
+        actions: [],
+        originalArtifact: {
+          label: "original",
+          extension: ".txt",
+          mime: "text/plain",
+          ...originalArtifact
+        },
+        optimizedArtifact: {
+          label: "optimized",
+          extension: ".txt",
+          mime: "text/plain",
+          ...optimizedArtifact
+        }
+      }]
+    };
+
+    session.root.entryOrder = [entryId];
+    session.root.stats.entryCount = 1;
+    session.root.stats.logicalBytes = sourceSize;
+    session.root.stats.storedBytes = originalArtifact.storageStats.storedBytes + optimizedArtifact.storageStats.storedBytes;
+    await service.saveEntry(entry);
+    await service.persistRoot();
+
+    const beforeReopen = await service.getStats();
+    assert.equal(beforeReopen.storedBytes, originalArtifact.storageStats.storedBytes + optimizedArtifact.storageStats.storedBytes);
+
+    const archivePath = path.join(tempDir, "migrate-demo.stow");
+    await service.closeArchive();
+    await service.openArchive({ archivePath, password: "password" });
+
+    const detail = await service.getEntryDetail(entryId);
+    assert.equal(detail.size, optimizedArtifact.size);
+    assert.equal(detail.sourceSize, sourceSize);
+    assert.equal(detail.revisions[0].optimizedArtifact, null);
+
+    const afterReopen = await service.getStats();
+    assert.equal(afterReopen.storedBytes, optimizedArtifact.storageStats.storedBytes);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("archive service clears ingest progress after an ingest failure", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-service-test-progress-reset-"));
   try {
@@ -1866,6 +1979,143 @@ test("archive service precomputes image previews during ingest", async () => {
 
     await fs.access(path.join(previewRoot, "thumbnail.json"));
     await fs.access(path.join(previewRoot, "preview.json"));
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("archive service refreshes preview descriptors after same-revision optimization updates", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-service-test-preview-refresh-"));
+  try {
+    const state = await createInitialState(path.join(tempDir, "user-data"), tempDir);
+    state.settings.deleteOriginalFilesAfterSuccessfulUpload = false;
+    state.installStatus = {
+      active: false,
+      phase: "complete",
+      message: "ready",
+      currentTarget: null,
+      completedSteps: 1,
+      totalSteps: 1,
+      installed: [],
+      skipped: []
+    };
+
+    const service = new ArchiveService(state, createEmitters());
+    await service.initialize();
+
+    await service.createArchive({
+      parentPath: tempDir,
+      name: "preview-refresh-demo",
+      password: "password",
+      preferences: state.settings
+    });
+
+    const sourcePath = path.join(tempDir, "refresh-source.png");
+    await sharp({
+      create: {
+        width: 800,
+        height: 600,
+        channels: 3,
+        background: { r: 80, g: 116, b: 168 }
+      }
+    })
+      .png()
+      .toFile(sourcePath);
+
+    await service.addPaths([sourcePath]);
+
+    const listing = await service.listEntries({ offset: 0, limit: 10 });
+    const detail = await service.getEntryDetail(listing.items[0].id);
+    const before = await service.resolveEntryPreview(detail.id, "preview");
+    assert.ok(before?.updatedAt);
+
+    await service.waitForOptimizationQueue();
+
+    const after = await service.resolveEntryPreview(detail.id, "preview");
+    assert.ok(after);
+    assert.ok(after?.updatedAt);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("archive service can re-import an exported optimized jpeg xl artifact", async (t) => {
+  try {
+    await runCommand("djxl", ["--version"]);
+    await runCommand("cjxl", ["--version"]);
+  } catch (_error) {
+    t.skip("jpeg xl tools are not available");
+  }
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-service-test-jxl-roundtrip-"));
+  try {
+    const state = await createInitialState(path.join(tempDir, "user-data"), tempDir);
+    state.settings.deleteOriginalFilesAfterSuccessfulUpload = false;
+    state.capabilities = {
+      ...(state.capabilities || {}),
+      djxl: { available: true, path: "djxl" },
+      cjxl: { available: true, path: "cjxl" }
+    };
+    state.installStatus = {
+      active: false,
+      phase: "complete",
+      message: "ready",
+      currentTarget: null,
+      completedSteps: 1,
+      totalSteps: 1,
+      installed: [],
+      skipped: []
+    };
+
+    const service = new ArchiveService(state, createEmitters());
+    await service.initialize();
+
+    await service.createArchive({
+      parentPath: tempDir,
+      name: "jxl-roundtrip-demo",
+      password: "password",
+      preferences: state.settings
+    });
+
+    const sourcePath = path.join(tempDir, "roundtrip-source.png");
+    await sharp({
+      create: {
+        width: 960,
+        height: 540,
+        channels: 3,
+        background: { r: 52, g: 128, b: 196 }
+      }
+    })
+      .png()
+      .toFile(sourcePath);
+
+    await service.addPaths([sourcePath]);
+    await service.waitForOptimizationQueue();
+
+    const firstListing = await service.listEntries({ offset: 0, limit: 10 });
+    const sourceDetail = await service.getEntryDetail(firstListing.items[0].id);
+    assert.equal(sourceDetail.exportableVariants.optimized, true);
+
+    const exportDir = path.join(tempDir, "exports");
+    await fs.mkdir(exportDir);
+    await service.exportEntry(sourceDetail.id, "optimized", exportDir);
+
+    const exportedPath = path.join(exportDir, "roundtrip-source-optimized.jxl");
+    await fs.access(exportedPath);
+
+    await service.addPaths([exportedPath]);
+    await service.waitForOptimizationQueue();
+
+    const listing = await service.listEntries({ offset: 0, limit: 10 });
+    assert.equal(listing.total, 2);
+    const imported = listing.items.find((item) => item.name === "roundtrip-source-optimized.jxl");
+    assert.ok(imported);
+
+    const importedDetail = await service.getEntryDetail(imported.id);
+    assert.equal(importedDetail.fileKind, "image");
+    const preview = await service.resolveEntryPreview(imported.id, "preview");
+    assert.ok(preview);
+    assert.match(preview.mime, /^image\//);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }

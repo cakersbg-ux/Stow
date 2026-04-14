@@ -72,6 +72,19 @@ function extname(filePath) {
   return path.extname(filePath).toLowerCase();
 }
 
+function resolveOptimizationTier(preferences = {}) {
+  if (typeof preferences.optimizationTier === "string") {
+    return preferences.optimizationTier;
+  }
+  if (preferences.optimizationMode === "pick_per_file") {
+    return "visually_lossless";
+  }
+  if (typeof preferences.optimizationMode === "string") {
+    return preferences.optimizationMode;
+  }
+  return "visually_lossless";
+}
+
 function supportsSharpImageInput(filePath) {
   const sharp = getSharp();
   if (!sharp) {
@@ -280,6 +293,7 @@ async function transcodeImageToJxl(filePath, preferences, capabilities, workDir,
   const derivative = null;
   const cjxlCommand = capabilities?.cjxl?.path || "cjxl";
   const sharp = getSharp();
+  const tier = resolveOptimizationTier(preferences);
 
   if ((metadata.pages || 1) > 1 || BAD_IMAGE_TRANSCODE_EXTENSIONS.has(extension)) {
     actions.push("preserved original because this image format is not eligible for derivative transcoding");
@@ -293,7 +307,7 @@ async function transcodeImageToJxl(filePath, preferences, capabilities, workDir,
 
   const mathematicallyLosslessSource = LOSSLESS_IMAGE_EXTENSIONS.has(extension);
   const likelyLossySource = LIKELY_LOSSY_IMAGE_EXTENSIONS.has(extension);
-  if (preferences.optimizationMode === "lossless" && likelyLossySource) {
+  if (tier === "lossless" && likelyLossySource) {
     actions.push("preserved original because source is already lossy");
     return { derivative, actions };
   }
@@ -314,7 +328,7 @@ async function transcodeImageToJxl(filePath, preferences, capabilities, workDir,
   await spawnCapture(
     cjxlCommand,
     buildJxlEncodeArgs(sourceForEncode, outputJxlPath, {
-      mathematicallyLossless: preferences.optimizationMode === "lossless" && mathematicallyLosslessSource
+      mathematicallyLossless: tier === "lossless" && mathematicallyLosslessSource
     }),
     {
       timeoutMs: DEFAULT_CJXL_TIMEOUT_MS
@@ -323,12 +337,12 @@ async function transcodeImageToJxl(filePath, preferences, capabilities, workDir,
 
   return {
     derivative: {
-      label: preferences.optimizationMode === "lossless" ? "optimized_lossless" : "optimized_visual",
+      label: tier === "lossless" ? "optimized_lossless" : "optimized_visual",
       path: outputJxlPath,
       extension: ".jxl",
       mime: "image/jxl",
       actions: [
-        preferences.optimizationMode === "lossless" && mathematicallyLosslessSource
+        tier === "lossless" && mathematicallyLosslessSource
           ? "transcoded to JPEG XL lossless"
           : "transcoded to JPEG XL visually lossless"
       ]
@@ -372,8 +386,9 @@ async function transcodeVideo(filePath, preferences, capabilities, workDir) {
   const actions = [];
   const sourceLossless = isLosslessCodec(videoStream?.codec_name);
   let derivative = null;
+  const tier = resolveOptimizationTier(preferences);
 
-  if (preferences.optimizationMode === "lossless" && sourceLossless) {
+  if (tier === "lossless" && sourceLossless) {
     const outputPath = path.join(workDir, `${uuid()}.mkv`);
     await runFfmpeg([
       "-y",
@@ -398,7 +413,7 @@ async function transcodeVideo(filePath, preferences, capabilities, workDir) {
       mime: "video/x-matroska",
       actions: ["transcoded to FFV1 lossless archival master"]
     };
-  } else if (preferences.optimizationMode === "lossless") {
+  } else if (tier === "lossless") {
     actions.push("preserved original because source video is already lossy");
   } else if (capabilities?.av1Encoder?.value) {
     const outputPath = path.join(workDir, `${uuid()}.mkv`);
@@ -574,11 +589,12 @@ async function generatePreviewFile(sourcePath, kind, variant, outputDir, capabil
   return null;
 }
 
-async function analyzePath(filePath, preferences, capabilities, workDir) {
+async function analyzePath(filePath, preferences, capabilities, workDir, options = {}) {
+  const shouldOptimize = options.optimize !== false;
   const normalizedPreferences = {
     ...preferences,
-    optimizationMode:
-      preferences.optimizationMode === "pick_per_file" ? "visually_lossless" : preferences.optimizationMode
+    optimizationTier: resolveOptimizationTier(preferences),
+    optimizationMode: resolveOptimizationTier(preferences)
   };
   const extension = extname(filePath);
   if (IMAGE_EXTENSIONS.has(extension) && !supportsSharpImageInput(filePath)) {
@@ -594,9 +610,55 @@ async function analyzePath(filePath, preferences, capabilities, workDir) {
 
   const kind = classifyPath(filePath);
   if (kind === "image") {
+    if (!shouldOptimize) {
+      const sharp = getSharp();
+      if (!sharp) {
+        return buildOpaqueFileAnalysis(filePath, "stored as general file object because sharp is unavailable");
+      }
+      const metadata = await sharp(filePath, { animated: true }).metadata();
+      return {
+        kind: "image",
+        original: {
+          path: filePath,
+          extension,
+          mime: fileDisplayType(filePath),
+          width: metadata.width || null,
+          height: metadata.height || null,
+          codec: null
+        },
+        derivative: null,
+        actions: ["stored baseline image without immediate optimization"],
+        summary: `${metadata.width || "?"}x${metadata.height || "?"}`,
+        previewSourcePath: filePath
+      };
+    }
     return optimizeImage(filePath, normalizedPreferences, capabilities, workDir);
   }
   if (kind === "video") {
+    if (!shouldOptimize) {
+      let probe;
+      try {
+        probe = await getVideoProbe(filePath);
+      } catch (_error) {
+        return buildOpaqueFileAnalysis(filePath, "stored as general file object because ffprobe is unavailable");
+      }
+      const videoStream = probe.streams.find((stream) => stream.codec_type === "video");
+      return {
+        kind: "video",
+        original: {
+          path: filePath,
+          extension,
+          mime: fileDisplayType(filePath),
+          width: videoStream?.width || null,
+          height: videoStream?.height || null,
+          codec: videoStream?.codec_name || null
+        },
+        derivative: null,
+        actions: ["stored baseline video without immediate optimization"],
+        summary: `${videoStream?.codec_name || "unknown"} ${videoStream?.width || "?"}x${videoStream?.height || "?"}`,
+        previewSourcePath: filePath
+      };
+    }
     return optimizeVideo(filePath, normalizedPreferences, capabilities, workDir);
   }
 

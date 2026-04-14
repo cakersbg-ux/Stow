@@ -1,7 +1,6 @@
 import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import packageJson from "../../../package.json";
 import type {
   AppShellState,
   ArchivePreferences,
@@ -15,7 +14,6 @@ import type {
   Settings
 } from "../../types";
 import {
-  ARCHIVE_ENTRY_DRAG_TYPE,
   LIST_PAGE_SIZE,
   ROW_HEIGHT,
   IS_MAC,
@@ -38,6 +36,7 @@ import {
   getNextMissingOffset,
   getSelectedSizeTotal,
   getVisibleEntries,
+  isArchiveEntryDrag,
   isEditableElement,
   isModKey,
   joinArchivePath,
@@ -46,6 +45,7 @@ import {
   parentDirectory,
   readArchiveDragPayload,
   resolveDetailRevision,
+  resolveClosestStandardResolutionLabel,
   resolveRangeSelection,
   resolveTheme,
   toArchivePreferences,
@@ -58,9 +58,6 @@ import {
   type SortColumn,
   type SortDirection
 } from "../archive/archiveModel";
-
-// ─── Constants ────────────────────────────────────────
-const versionLabel = `Stow v${packageJson.version}`;
 
 // ─── EntryThumbnail ────────────────────────────────────
 export function EntryThumbnail({
@@ -92,7 +89,7 @@ export function EntryThumbnail({
         }
       });
     return () => { cancelled = true; };
-  }, [entry.id, entry.latestRevisionId, entry.previewable, resolveThumbnail]);
+  }, [entry.id, entry.latestRevisionId, entry.optimizationState, entry.previewable, entry.size, resolveThumbnail]);
 
   if (thumb) return <span className="entry-thumbnail"><img className="entry-thumbnail-media" src={thumb.path} alt="" /></span>;
   return <span className="entry-thumbnail">{entry.previewable && !resolved ? "…" : entry.fileKind.slice(0, 3).toUpperCase()}</span>;
@@ -233,7 +230,7 @@ export function ContextMenuComponent({
             <>
               <div className="context-menu-separator" />
               <button type="button" className="context-menu-item" disabled={isBusy} onClick={() => { onExportOriginal(); onClose(); }}>
-                Export original
+                Export stored
               </button>
               <button type="button" className="context-menu-item" disabled={isBusy} onClick={() => { onExportOptimized(); onClose(); }}>
                 Export optimized
@@ -341,7 +338,7 @@ export function TreeSidebar({
   function handleDragOver(path: string, e: React.DragEvent) {
     e.preventDefault();
     setDropTarget(path);
-    e.dataTransfer.dropEffect = e.dataTransfer.types.includes(ARCHIVE_ENTRY_DRAG_TYPE) ? "move" : "copy";
+    e.dataTransfer.dropEffect = isArchiveEntryDrag(e.dataTransfer) ? "move" : "copy";
   }
 
   function handleDrop(path: string, e: React.DragEvent) {
@@ -430,7 +427,7 @@ export function FileList({
   entries, total, loadedCount, currentDirectory, selectedIds, focusedId,
   renamingEntryId, renameDraft, renameInputRef,
   emptyState, unlockPassword, unlockDisabled, isBusy,
-  onUnlockPasswordChange, onUnlock, onClickEntry, onDoubleClickEntry, onContextMenu,
+  onUnlockPasswordChange, onUnlock, onClickEntry, onToggleEntrySelection, onDoubleClickEntry, onContextMenu,
   onDragStart, onDropPaths, onMoveEntries, onNeedMore,
   onRenameChange, onRenameSubmit, onRenameCancel, resolveThumbnail,
   sortColumn, sortDirection, onSort
@@ -451,6 +448,7 @@ export function FileList({
   onUnlockPasswordChange: (v: string) => void;
   onUnlock: () => void;
   onClickEntry: (entry: ArchiveEntryListItem, e: React.MouseEvent) => void;
+  onToggleEntrySelection: (entry: ArchiveEntryListItem) => void;
   onDoubleClickEntry: (entry: ArchiveEntryListItem) => void;
   onContextMenu: (entry: ArchiveEntryListItem | null, e: React.MouseEvent) => void;
   onDragStart: (entry: ArchiveEntryListItem, e: React.DragEvent) => void;
@@ -544,7 +542,7 @@ export function FileList({
                   if (!isFolder) return;
                   e.preventDefault();
                   setDropTarget(entry.relativePath);
-                  e.dataTransfer.dropEffect = e.dataTransfer.types.includes(ARCHIVE_ENTRY_DRAG_TYPE) ? "move" : "copy";
+                  e.dataTransfer.dropEffect = isArchiveEntryDrag(e.dataTransfer) ? "move" : "copy";
                 }}
                 onDragLeave={() => { if (dropTarget === entry.relativePath) setDropTarget(null); }}
                 onDrop={e => {
@@ -565,7 +563,7 @@ export function FileList({
                     type="checkbox"
                     checked={isSelected}
                     readOnly
-                    onClick={e => { e.stopPropagation(); onClickEntry(entry, e as unknown as React.MouseEvent); }}
+                    onClick={e => { e.stopPropagation(); onToggleEntrySelection(entry); }}
                   />
                 </div>
                 <div className={`file-cell file-cell-name${isFolder ? " file-cell-name-folder" : ""}`}>
@@ -581,13 +579,22 @@ export function FileList({
                         if (e.key === "Enter") { e.preventDefault(); onRenameSubmit(); }
                         if (e.key === "Escape") { e.preventDefault(); onRenameCancel(); }
                       }}
+                      onBlur={() => { void onRenameSubmit(); }}
                       onClick={e => e.stopPropagation()}
                     />
                   ) : (
                     <span className={`file-cell-name-text${isFolder ? " file-cell-folder" : ""}`}>{entry.name}</span>
                   )}
                   {!isFolder && entry.overrideMode && !isRenaming && (
-                    <span className="override-badge">{entry.overrideMode === "lossless" ? "L" : "V"}</span>
+                    <span className="override-badge">
+                      {entry.overrideMode === "lossless"
+                        ? "L"
+                        : entry.overrideMode === "visually_lossless"
+                          ? "V"
+                          : entry.overrideMode === "lossy_balanced"
+                            ? "B"
+                            : "A"}
+                    </span>
                   )}
                 </div>
                 <div className="file-cell file-cell-muted">{isFolder ? "folder" : entry.fileKind}</div>
@@ -609,7 +616,7 @@ export function FileList({
 // ─── DetailPanel ───────────────────────────────────────
 export function DetailPanel({
   selectedIds, entries, selectedEntry, preview, detailRevision,
-  overrideMode, isBusy, onClose,
+  overrideMode, canReprocessLossless, isBusy, onClose,
   onOpen, onExportOriginal, onExportOptimized, onReprocess, onDelete,
   onOverrideModeChange, onBulkDelete, onBulkExport
 }: {
@@ -618,7 +625,8 @@ export function DetailPanel({
   selectedEntry: ArchiveEntryDetail | null;
   preview: PreviewDescriptor | null;
   detailRevision: ArchiveEntryDetail["revisions"][number] | null;
-  overrideMode: "lossless" | "visually_lossless";
+  overrideMode: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive";
+  canReprocessLossless: boolean;
   isBusy: boolean;
   onClose: () => void;
   onOpen: () => void;
@@ -626,7 +634,7 @@ export function DetailPanel({
   onExportOptimized: () => void;
   onReprocess: () => void;
   onDelete: () => void;
-  onOverrideModeChange: (v: "lossless" | "visually_lossless") => void;
+  onOverrideModeChange: (v: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive") => void;
   onBulkDelete: () => void;
   onBulkExport: (variant: "original" | "optimized") => void;
 }) {
@@ -637,6 +645,9 @@ export function DetailPanel({
     if (!multiSelect) return null;
     return getSelectedSizeTotal(entries, selectedIds);
   }, [entries, multiSelect, selectedIds]);
+  const closestStandardResolution = selectedEntry && detailRevision
+    ? resolveClosestStandardResolutionLabel(detailRevision.media.width, detailRevision.media.height)
+    : null;
 
   return (
     <div className="detail-panel">
@@ -645,7 +656,7 @@ export function DetailPanel({
         <button type="button" style={{ border: 0, background: "transparent", fontSize: 14, color: "var(--text-secondary)", padding: "0 4px" }} onClick={onClose} title="Close inspector">✕</button>
       </div>
 
-      {count === 0 && (
+      {(count === 0 || (count === 1 && !selectedEntry)) && (
         <div className="detail-panel-empty">Select a file to inspect it</div>
       )}
 
@@ -653,14 +664,14 @@ export function DetailPanel({
         <div className="detail-panel-body">
           <div className="detail-bulk-summary">
             <strong>{count} items selected</strong>
-            {totalSize !== null && <span className="muted">{formatBytes(totalSize)} current total</span>}
+            {totalSize !== null && <span className="muted">{formatBytes(totalSize)} stored total</span>}
           </div>
           <div className="detail-actions">
-            <button type="button" disabled={isBusy} onClick={() => onBulkExport("original")}>Export originals</button>
-            <button type="button" disabled={isBusy} onClick={() => onBulkExport("optimized")}>Export optimized</button>
+            <button type="button" className="detail-action detail-action-neutral" disabled={isBusy || !(selectedEntry?.exportableVariants.original ?? false)} onClick={() => onBulkExport("original")}>Export original</button>
+            <button type="button" className="detail-action detail-action-neutral" disabled={isBusy} onClick={() => onBulkExport("optimized")}>Export optimized</button>
           </div>
           <div className="detail-actions">
-            <button type="button" className="btn-danger" disabled={isBusy} onClick={onBulkDelete}>Delete {count} items</button>
+            <button type="button" className="detail-action detail-action-danger" disabled={isBusy} onClick={onBulkDelete}>Delete {count} items</button>
           </div>
         </div>
       )}
@@ -678,7 +689,7 @@ export function DetailPanel({
               <span className="detail-meta-value">{selectedEntry.fileKind}</span>
             </div>
             <div className="detail-meta-row">
-              <span className="detail-meta-label">Current size</span>
+              <span className="detail-meta-label">Stored size</span>
               <span className="detail-meta-value">{formatBytes(selectedEntry.size)}</span>
             </div>
             {selectedEntry.sourceSize !== selectedEntry.size && (
@@ -697,10 +708,30 @@ export function DetailPanel({
                 <span className="detail-meta-value">{detailRevision.media.width}×{detailRevision.media.height}</span>
               </div>
             )}
+            {closestStandardResolution && (
+              <div className="detail-meta-row">
+                <span className="detail-meta-label">Closest standard</span>
+                <span className="detail-meta-value" title="Based on total pixels">{closestStandardResolution}</span>
+              </div>
+            )}
             <div className="detail-meta-row">
-              <span className="detail-meta-label">Mode</span>
-              <span className="detail-meta-value">{detailRevision.overrideMode ?? "default"}</span>
+              <span className="detail-meta-label">Tier</span>
+              <span className="detail-meta-value">{detailRevision.optimizationTier ?? detailRevision.overrideMode ?? "default"}</span>
             </div>
+            <div className="detail-meta-row">
+              <span className="detail-meta-label">Optimization</span>
+              <span className="detail-meta-value">{detailRevision.optimizationState ?? "pending_optimization"}</span>
+            </div>
+            <div className="detail-meta-row">
+              <span className="detail-meta-label">Source</span>
+              <span className="detail-meta-value">{detailRevision.sourceArtifact ? "retained" : "dropped"}</span>
+            </div>
+            {detailRevision.optimizationDecision?.selectedCandidateId && (
+              <div className="detail-meta-row">
+                <span className="detail-meta-label">Selected</span>
+                <span className="detail-meta-value">{detailRevision.optimizationDecision.selectedCandidateId}</span>
+              </div>
+            )}
             {detailRevision.summary && (
               <div className="detail-meta-row">
                 <span className="detail-meta-label">Summary</span>
@@ -708,20 +739,22 @@ export function DetailPanel({
               </div>
             )}
           </div>
-          <div className="detail-actions">
-            <button type="button" disabled={isBusy} onClick={onOpen}>Open</button>
-            <button type="button" disabled={isBusy} onClick={onExportOriginal}>Export original</button>
-            <button type="button" disabled={isBusy || !selectedEntry.exportableVariants.optimized} onClick={onExportOptimized}>Export optimized</button>
+          <div className="detail-actions detail-actions-primary">
+            <button type="button" className="detail-action detail-action-accent" disabled={isBusy} onClick={onOpen}>Open</button>
+            <button type="button" className="detail-action detail-action-neutral" disabled={isBusy || !selectedEntry.exportableVariants.original} onClick={onExportOriginal}>Export original</button>
+            <button type="button" className="detail-action detail-action-neutral" disabled={isBusy || !selectedEntry.exportableVariants.optimized} onClick={onExportOptimized}>Export optimized</button>
           </div>
           <div className="detail-actions">
-            <select disabled={isBusy} value={overrideMode} onChange={e => onOverrideModeChange(e.target.value as "lossless" | "visually_lossless")} style={{ flex: 1 }}>
+            <select disabled={isBusy} value={overrideMode} onChange={e => onOverrideModeChange(e.target.value as "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive")} style={{ flex: 1 }}>
               <option value="visually_lossless">visually lossless</option>
-              <option value="lossless">lossless</option>
+              {canReprocessLossless && <option value="lossless">lossless</option>}
+              <option value="lossy_balanced">lossy balanced</option>
+              <option value="lossy_aggressive">lossy aggressive</option>
             </select>
-            <button type="button" disabled={isBusy} onClick={onReprocess}>Reprocess</button>
+            <button type="button" className="detail-action detail-action-neutral" disabled={isBusy} onClick={onReprocess}>Reprocess</button>
           </div>
           <div className="detail-actions">
-            <button type="button" className="btn-danger" disabled={isBusy} onClick={onDelete}>Delete file</button>
+            <button type="button" className="detail-action detail-action-danger" disabled={isBusy} onClick={onDelete}>Delete file</button>
           </div>
           {detailRevision.actions.length > 0 && (
             <ul className="detail-revision-list" style={{ margin: 0, paddingLeft: 14 }}>
@@ -736,22 +769,19 @@ export function DetailPanel({
 
 // ─── SettingsDialog ────────────────────────────────────
 export function SettingsDialog({
-  open, value, draftPrefs, isBusy, capabilities, archiveUnlocked, installStatus,
-  onClose, onChange, onChangePrefs, onSave, onReset, onSaveArchivePolicy, onInstallMissingTools
+  open, value, draftPrefs, isBusy, capabilities, installStatus,
+  onClose, onChange, onChangePrefs, onReset, onInstallMissingTools
 }: {
   open: boolean;
   value: Settings;
   draftPrefs: ArchivePreferences;
   isBusy: boolean;
   capabilities: AppShellState["capabilities"];
-  archiveUnlocked: boolean;
   installStatus: InstallStatus;
   onClose: () => void;
   onChange: (s: Settings) => void;
   onChangePrefs: (p: ArchivePreferences) => void;
-  onSave: () => void;
   onReset: () => void;
-  onSaveArchivePolicy: () => void;
   onInstallMissingTools: () => void;
 }) {
   if (!open) return null;
@@ -819,26 +849,15 @@ export function SettingsDialog({
             <div className="settings-section-title">Archive Defaults</div>
             <div className="settings-grid">
               <div className="setting-field">
-                <label className="setting-label">Compression</label>
-                <select disabled={isBusy} value={draftPrefs.compressionBehavior} onChange={e => setP("compressionBehavior", e.target.value as ArchivePreferences["compressionBehavior"])}>
-                  <option value="fast">fast</option>
-                  <option value="balanced">balanced</option>
-                  <option value="max">max</option>
-                </select>
-              </div>
-              <div className="setting-field">
-                <label className="setting-label">Optimization mode</label>
-                <select disabled={isBusy} value={draftPrefs.optimizationMode} onChange={e => setP("optimizationMode", e.target.value as ArchivePreferences["optimizationMode"])}>
+                <label className="setting-label">Optimization tier</label>
+                <select disabled={isBusy} value={draftPrefs.optimizationTier} onChange={e => setP("optimizationTier", e.target.value as ArchivePreferences["optimizationTier"])}>
                   <option value="lossless">lossless</option>
                   <option value="visually_lossless">visually lossless</option>
-                  <option value="pick_per_file">pick per file</option>
+                  <option value="lossy_balanced">lossy balanced</option>
+                  <option value="lossy_aggressive">lossy aggressive</option>
                 </select>
               </div>
-              <div className="toggle-field">
-                <span className="setting-label">Strip derivative metadata</span>
-                <input type="checkbox" className="toggle-switch" checked={draftPrefs.stripDerivativeMetadata} disabled={isBusy}
-                  onChange={e => setP("stripDerivativeMetadata", e.target.checked)} />
-              </div>
+              <div className="setting-hint">Compression and metadata policy are now handled automatically by the backend planner.</div>
             </div>
           </div>
           <div className="settings-divider" />
@@ -867,13 +886,29 @@ export function SettingsDialog({
               ))}
             </div>
           </details>
+          <details className="settings-tools">
+            <summary>Developer settings</summary>
+            <div className="settings-grid" style={{ marginTop: 12 }}>
+              <div className="toggle-field">
+                <span className="setting-label">Activity log panel</span>
+                <input
+                  type="checkbox"
+                  className="toggle-switch"
+                  checked={value.developerActivityLogEnabled}
+                  disabled={isBusy}
+                  onChange={e => set("developerActivityLogEnabled", e.target.checked)}
+                />
+              </div>
+              <div className="setting-hint">
+                Shows a persistent terminal-style activity log panel on the right side of the app.
+              </div>
+            </div>
+          </details>
         </div>
         <div className="dialog-footer">
           <button type="button" disabled={isBusy} onClick={onReset}>Reset defaults</button>
           <div className="actions">
-            {archiveUnlocked && <button type="button" disabled={isBusy} onClick={onSaveArchivePolicy}>Save archive policy</button>}
             <button type="button" onClick={onClose}>Close</button>
-            <button type="button" className="btn-primary" disabled={isBusy} onClick={onSave}>Save</button>
           </div>
         </div>
       </div>
@@ -969,26 +1004,15 @@ export function ArchiveManagerDialog({
                 <div className="settings-section-title">Optimization</div>
                 <div className="settings-grid">
                   <div className="setting-field">
-                    <label className="setting-label">Compression</label>
-                    <select disabled={isBusy} value={draftPrefs.compressionBehavior} onChange={e => setP("compressionBehavior", e.target.value as ArchivePreferences["compressionBehavior"])}>
-                      <option value="fast">fast</option>
-                      <option value="balanced">balanced</option>
-                      <option value="max">max</option>
-                    </select>
-                  </div>
-                  <div className="setting-field">
-                    <label className="setting-label">Optimization mode</label>
-                    <select disabled={isBusy} value={draftPrefs.optimizationMode} onChange={e => setP("optimizationMode", e.target.value as ArchivePreferences["optimizationMode"])}>
+                    <label className="setting-label">Optimization tier</label>
+                    <select disabled={isBusy} value={draftPrefs.optimizationTier} onChange={e => setP("optimizationTier", e.target.value as ArchivePreferences["optimizationTier"])}>
                       <option value="lossless">lossless</option>
                       <option value="visually_lossless">visually lossless</option>
-                      <option value="pick_per_file">pick per file</option>
+                      <option value="lossy_balanced">lossy balanced</option>
+                      <option value="lossy_aggressive">lossy aggressive</option>
                     </select>
                   </div>
-                  <div className="toggle-field">
-                    <span className="setting-label">Strip derivative metadata</span>
-                    <input type="checkbox" className="toggle-switch" checked={draftPrefs.stripDerivativeMetadata} disabled={isBusy}
-                      onChange={e => setP("stripDerivativeMetadata", e.target.checked)} />
-                  </div>
+                  <div className="setting-hint">The backend now auto-selects codec and compression policy per file.</div>
                 </div>
               </div>
               <div className="actions">
@@ -1068,7 +1092,6 @@ export function ArchiveBrowserDialog({
                       <div className="browser-row-main">
                         <div className="browser-row-title">
                           <strong>{a.name}</strong>
-                          {isCur && <span className="browser-badge browser-badge-accent">open</span>}
                           {a.source === "recent" && <span className="browser-badge browser-badge-muted">recent</span>}
                         </div>
                         <span>{a.path}</span>
@@ -1136,25 +1159,17 @@ export function DeleteConfirmationDialog({
       <div className="dialog delete-dialog" role="alertdialog" aria-modal="true" onClick={e => e.stopPropagation()}>
         <div className="dialog-header">
           <div>
-            <div className="delete-kicker">Confirm delete</div>
             <h2>{title}</h2>
           </div>
-          <button type="button" onClick={onCancel}>Close</button>
+          <div className="actions">
+            <button type="button" onClick={onCancel}>Close</button>
+            <button type="button" className="btn-danger" disabled={isBusy} onClick={onConfirm}>Delete</button>
+          </div>
         </div>
         <div className="dialog-body">
           <div className="delete-card">
             <strong>{description}</strong>
             {detail && <span className="muted">{detail}</span>}
-          </div>
-          <div className="warning" style={{ marginTop: 10 }}>
-            <strong>This action is permanent and cannot be undone.</strong>
-          </div>
-        </div>
-        <div className="dialog-footer">
-          <div />
-          <div className="actions">
-            <button type="button" onClick={onCancel}>Cancel</button>
-            <button type="button" className="btn-danger" disabled={isBusy} onClick={onConfirm}>Delete</button>
           </div>
         </div>
       </div>
@@ -1163,23 +1178,71 @@ export function DeleteConfirmationDialog({
   );
 }
 
-// ─── LogDrawer ─────────────────────────────────────────
-export function LogDrawer({ logs, onClose }: { logs: string[]; onClose: () => void }) {
+type ActivityLogTone = "neutral" | "success" | "warning" | "danger" | "info";
+
+function classifyActivityLogLine(message: string): ActivityLogTone {
+  const lower = message.toLowerCase();
+  if (lower.includes("failed") || lower.includes("error") || lower.includes("corrupt") || lower.includes("unsupported")) {
+    return "danger";
+  }
+  if (lower.includes("warning") || lower.includes("skipped") || lower.includes("unable") || lower.includes("missing")) {
+    return "warning";
+  }
+  if (lower.includes("created") || lower.includes("opened") || lower.includes("exported") || lower.includes("installed") || lower.includes("restored")) {
+    return "success";
+  }
+  if (lower.includes("deleted") || lower.includes("locked") || lower.includes("unlocked") || lower.includes("closed") || lower.includes("recovered")) {
+    return "info";
+  }
+  return "neutral";
+}
+
+function splitActivityLogLine(line: string) {
+  const match = line.match(/^(\S+)\s+(.*)$/);
+  if (!match) {
+    return {
+      timestamp: "",
+      message: line
+    };
+  }
+
+  return {
+    timestamp: match[1],
+    message: match[2]
+  };
+}
+
+// ─── ActivityLogPanel ─────────────────────────────────
+export function ActivityLogPanel({ logs }: { logs: string[] }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [logs]);
 
   return (
-    <div className="log-drawer">
-      <div className="log-drawer-header">
-        <h2>Activity Log</h2>
-        <button type="button" style={{ border: 0, background: "transparent", color: "var(--text-secondary)", padding: "0 4px" }} onClick={onClose}>✕</button>
+    <aside className="activity-log-panel" aria-label="Developer activity log">
+      <div className="activity-log-header">
+        <div>
+          <div className="activity-log-kicker">Developer</div>
+          <h2>Activity log</h2>
+        </div>
+        <span className="activity-log-count">{logs.length.toLocaleString()} lines</span>
       </div>
-      <div ref={bodyRef} className="log-drawer-body">
-        {logs.length === 0 ? <span className="muted">No activity yet.</span> : logs.map((l, i) => <div key={i}>{l}</div>)}
+      <div ref={bodyRef} className="activity-log-body">
+        {logs.length === 0 ? (
+          <div className="activity-log-empty">No activity yet.</div>
+        ) : logs.map((line, index) => {
+          const { timestamp, message } = splitActivityLogLine(line);
+          const tone = classifyActivityLogLine(message);
+          return (
+            <div key={`${index}-${line}`} className={`activity-log-line activity-log-line-${tone}`}>
+              <span className="activity-log-time">{timestamp}</span>
+              <span className="activity-log-text">{message}</span>
+            </div>
+          );
+        })}
       </div>
-    </div>
+    </aside>
   );
 }
 
@@ -1226,9 +1289,6 @@ export function Hub({
         <div className="hub-session">
           <div className="hub-session-info">
             <strong>{currentSummary?.name ?? currentPath?.split(/[/\\]/).pop() ?? "Archive"}</strong>
-            <span className={`browser-badge ${archiveUnlocked ? "browser-badge-accent" : "browser-badge-muted"}`}>
-              {archiveUnlocked ? "open" : "locked"}
-            </span>
             {currentSummary && (
               <span className="hub-session-meta">
                 {currentSummary.entryCount.toLocaleString()} files &middot; {formatBytes(currentSummary.storedBytes)}
@@ -1285,7 +1345,6 @@ export function Hub({
             >
               <div className="hub-row-name">
                 <strong>{archive.name}</strong>
-                {isCurrent && <span className="browser-badge browser-badge-accent">{archiveUnlocked ? "open" : "locked"}</span>}
                 <span className="hub-row-path">{archive.path}</span>
               </div>
               <span className="hub-row-cell">{formatDateTime(archive.lastModifiedAt)}</span>

@@ -11,8 +11,9 @@ import {
   archiveBreadcrumbs,
   formatBytes,
   isEditableElement,
+  isArchiveEntryDrag,
   isModKey,
-  mergePrefs,
+  canReprocessLosslessly,
   parentDirectory,
   readArchiveDragPayload,
   resolveTheme,
@@ -28,10 +29,10 @@ import {
   ContextMenuComponent,
   DeleteConfirmationDialog,
   DetailPanel,
+  ActivityLogPanel,
   FileList,
   Hub,
   InstallBanner,
-  LogDrawer,
   ProgressBar,
   SettingsDialog,
   TreeSidebar
@@ -40,8 +41,31 @@ import { useArchiveBrowser } from "./useArchiveBrowser";
 import { useUploadQueue } from "./useUploadQueue";
 import { useShellStore } from "./useShellStore";
 
-const versionLabel = `Stow v${packageJson.version}`;
 type AppView = "hub" | "archive";
+
+type ArchiveHistoryState = {
+  archiveId: string | null;
+  directory: string;
+};
+
+function settingsEqual(a: AppShellState["settings"], b: AppShellState["settings"]) {
+  return a.compressionBehavior === b.compressionBehavior &&
+    a.optimizationTier === b.optimizationTier &&
+    a.stripDerivativeMetadata === b.stripDerivativeMetadata &&
+    a.deleteOriginalFilesAfterSuccessfulUpload === b.deleteOriginalFilesAfterSuccessfulUpload &&
+    a.argonProfile === b.argonProfile &&
+    a.preferredArchiveRoot === b.preferredArchiveRoot &&
+    a.themePreference === b.themePreference &&
+    a.sessionIdleMinutes === b.sessionIdleMinutes &&
+    a.sessionLockOnHide === b.sessionLockOnHide &&
+    a.developerActivityLogEnabled === b.developerActivityLogEnabled;
+}
+
+function archivePreferencesEqual(a: ArchivePreferences, b: ArchivePreferences) {
+  return a.compressionBehavior === b.compressionBehavior &&
+    a.optimizationTier === b.optimizationTier &&
+    a.stripDerivativeMetadata === b.stripDerivativeMetadata;
+}
 
 function AppShell() {
   const shell = useShellStore();
@@ -130,10 +154,6 @@ function AppShell() {
   const draftSettings = shell.draftSettings;
   const draftArchivePreferences = shell.draftArchivePreferences;
 
-  // ── Drag
-  const [isDragOver, setIsDragOver] = useState(false);
-  const dragCounterRef = useRef(0);
-
   // ── Dialogs
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [archiveManagerOpen, setArchiveManagerOpen] = useState(false);
@@ -141,7 +161,6 @@ function AppShell() {
   const [archiveDeleteCandidate, setArchiveDeleteCandidate] = useState<ArchiveBrowserItem | null>(null);
   const [deleteDialogState, setDeleteDialogState] = useState<{ title: string; description: string; detail: string; onConfirm: () => void } | null>(null);
   const [detailOpen, setDetailOpen] = useState(true);
-  const [logOpen, setLogOpen] = useState(false);
 
   // ── Archive form state
   const [archiveName, setArchiveName] = useState("Archive");
@@ -151,11 +170,25 @@ function AppShell() {
   const [openArchivePath, setOpenArchivePath] = useState("");
   const [openPassword, setOpenPassword] = useState("");
   const [unlockPassword, setUnlockPassword] = useState("");
-  const [overrideMode, setOverrideMode] = useState<"lossless" | "visually_lossless">("visually_lossless");
+  const [overrideMode, setOverrideMode] = useState<"lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive">("visually_lossless");
+  const [breadcrumbDropTarget, setBreadcrumbDropTarget] = useState<string | null>(null);
+  const settingsAutosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settingsAutosaveRunningRef = useRef(false);
+  const shellStateRef = useRef(shellState);
+  const draftSettingsRef = useRef(draftSettings);
+  const draftArchivePreferencesRef = useRef(draftArchivePreferences);
+  const archiveUnlockedRef = useRef(archiveUnlocked);
+  const currentDirectoryRef = useRef(currentDirectory);
+  const activeViewRef = useRef(activeView);
+  const archiveHistoryStateRef = useRef<ArchiveHistoryState | null>(null);
+  const suppressHistorySyncRef = useRef(false);
 
   // ── Derived state
   const showArchiveView = archiveUnlocked && activeView === "archive";
+  const showActivityLogPanel = shellState.settings.developerActivityLogEnabled;
   const selectedArchiveIsUnlocked = Boolean(shellState.archive?.unlocked && shellState.archive?.path === openArchivePath);
+  const canReprocessLossless = canReprocessLosslessly(selectedEntry);
+  const effectiveOverrideMode = overrideMode === "lossless" && !canReprocessLossless ? "visually_lossless" : overrideMode;
   const uiLocked = isBusy;
   const passwordsMatch = archivePassword.length > 0 && archivePassword === confirmArchivePassword;
   const canOpenArchive = !uiLocked && Boolean(openArchivePath) && (selectedArchiveIsUnlocked || Boolean(openPassword));
@@ -183,6 +216,19 @@ function AppShell() {
   });
   const resolveThumbnail = useCallback((entryId: string) => window.stow.resolveEntryPreview(entryId, "thumbnail"), []);
 
+  useEffect(() => {
+    if (!canReprocessLossless && overrideMode === "lossless") {
+      setOverrideMode("visually_lossless");
+    }
+  }, [canReprocessLossless, overrideMode]);
+
+  shellStateRef.current = shellState;
+  draftSettingsRef.current = draftSettings;
+  draftArchivePreferencesRef.current = draftArchivePreferences;
+  archiveUnlockedRef.current = archiveUnlocked;
+  currentDirectoryRef.current = currentDirectory;
+  activeViewRef.current = activeView;
+
   function applyShellState(next: AppShellState) {
     shell.applyShellState(next);
     if (next.archive?.path) {
@@ -202,12 +248,7 @@ function AppShell() {
     shell.applyArchivePreferences(next);
   }
 
-  function resetDraftSettings() {
-    shell.resetDraftSettings();
-  }
-
   function closeSettingsDialog() {
-    resetDraftSettings();
     setSettingsOpen(false);
   }
 
@@ -252,14 +293,6 @@ function AppShell() {
     setArchiveManagerOpen(false);
   }
 
-  async function saveArchivePreferences() {
-    if (!archiveUnlocked) return;
-    await shell.runTask("Saving archive policy", async () => {
-      const next = await window.stow.setArchivePreferences(draftArchivePreferences);
-      return { ...next, settings: mergePrefs(next.settings, draftArchivePreferences) };
-    });
-  }
-
   function requestDelete(entryIds: string[]) {
     if (entryIds.length === 0) return;
     const single = entryIds.length === 1;
@@ -289,6 +322,64 @@ function AppShell() {
     });
   }
 
+  useEffect(() => {
+    if (!archiveUnlocked || !showArchiveView || !shellState.archive?.summary?.archiveId) {
+      return;
+    }
+
+    const nextState: ArchiveHistoryState = {
+      archiveId: shellState.archive.summary.archiveId,
+      directory: currentDirectory
+    };
+    const previousState = archiveHistoryStateRef.current;
+    const shouldReplace = !previousState || previousState.archiveId !== nextState.archiveId;
+
+    if (
+      previousState &&
+      previousState.archiveId === nextState.archiveId &&
+      previousState.directory === nextState.directory
+    ) {
+      return;
+    }
+
+    if (suppressHistorySyncRef.current) {
+      suppressHistorySyncRef.current = false;
+      archiveHistoryStateRef.current = nextState;
+      return;
+    }
+
+    window.history[shouldReplace ? "replaceState" : "pushState"](nextState, "", window.location.href);
+    archiveHistoryStateRef.current = nextState;
+  }, [archiveUnlocked, currentDirectory, shellState.archive?.summary?.archiveId, showArchiveView]);
+
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      const state = event.state as ArchiveHistoryState | null;
+      if (
+        !state ||
+        typeof state.archiveId !== "string" ||
+        typeof state.directory !== "string" ||
+        !archiveUnlockedRef.current ||
+        state.archiveId !== shellStateRef.current.archive?.summary?.archiveId
+      ) {
+        return;
+      }
+
+      suppressHistorySyncRef.current = true;
+
+      if (activeViewRef.current !== "archive") {
+        setActiveView("archive");
+      }
+
+      if (currentDirectoryRef.current !== state.directory) {
+        navigateToDirectory(state.directory);
+      }
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [navigateToDirectory]);
+
   function requestDeleteArchive(archive: ArchiveBrowserItem) {
     setArchiveDeleteCandidate(archive);
   }
@@ -311,6 +402,20 @@ function AppShell() {
     e.dataTransfer.setData(ARCHIVE_ENTRY_DRAG_TYPE, JSON.stringify(payload));
     e.dataTransfer.effectAllowed = "move";
   }
+
+  const handleToggleEntrySelection = useCallback((entry: ArchiveEntryListItem) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(entry.id)) {
+        next.delete(entry.id);
+      } else {
+        next.add(entry.id);
+      }
+      return next;
+    });
+    setFocusedId(entry.id);
+    setLastClickedId(entry.id);
+  }, [setFocusedId, setLastClickedId, setSelectedIds]);
 
   async function confirmDeleteArchive() {
     if (!archiveDeleteCandidate) return;
@@ -385,6 +490,76 @@ function AppShell() {
   useEffect(() => { setCreateFolderDraft(""); }, [shellState.archive?.summary?.archiveId]);
   useEffect(() => { setCreateFolderDraft(""); }, [currentDirectory]);
 
+  useEffect(() => {
+    const currentArchivePreferences = shellState.archive?.summary?.preferences ?? toArchivePreferences(shellState.settings);
+    const settingsDirty = !settingsEqual(draftSettings, shellState.settings);
+    const archivePreferencesDirty = archiveUnlocked && !archivePreferencesEqual(draftArchivePreferences, currentArchivePreferences);
+
+    if (!settingsDirty && !archivePreferencesDirty) {
+      if (settingsAutosaveTimerRef.current) {
+        clearTimeout(settingsAutosaveTimerRef.current);
+        settingsAutosaveTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (settingsAutosaveRunningRef.current) {
+      return;
+    }
+
+    if (settingsAutosaveTimerRef.current) {
+      clearTimeout(settingsAutosaveTimerRef.current);
+    }
+
+    settingsAutosaveTimerRef.current = setTimeout(() => {
+      settingsAutosaveTimerRef.current = null;
+      if (settingsAutosaveRunningRef.current) return;
+      settingsAutosaveRunningRef.current = true;
+
+      void (async () => {
+        try {
+          while (true) {
+            const nextSettings = draftSettingsRef.current;
+            const nextArchivePreferences = draftArchivePreferencesRef.current;
+            const currentShellState = shellStateRef.current;
+            const currentArchivePreferences = currentShellState.archive?.summary?.preferences ?? toArchivePreferences(currentShellState.settings);
+            const saveSettingsNeeded = !settingsEqual(nextSettings, currentShellState.settings);
+            const saveArchivePreferencesNeeded = archiveUnlockedRef.current &&
+              !archivePreferencesEqual(nextArchivePreferences, currentArchivePreferences);
+
+            if (!saveSettingsNeeded && !saveArchivePreferencesNeeded) {
+              break;
+            }
+
+            if (saveSettingsNeeded) {
+              const next = await window.stow.saveSettings(nextSettings);
+              shell.applyShellState(next);
+              if (saveArchivePreferencesNeeded) {
+                shell.setDraftArchivePreferences(nextArchivePreferences);
+              }
+              continue;
+            }
+
+            if (saveArchivePreferencesNeeded) {
+              const next = await window.stow.setArchivePreferences(nextArchivePreferences);
+              shell.applyShellState(next);
+              continue;
+            }
+          }
+        } finally {
+          settingsAutosaveRunningRef.current = false;
+        }
+      })();
+    }, 300);
+
+    return () => {
+      if (settingsAutosaveTimerRef.current) {
+        clearTimeout(settingsAutosaveTimerRef.current);
+        settingsAutosaveTimerRef.current = null;
+      }
+    };
+  }, [archiveUnlocked, draftArchivePreferences, draftSettings, shell.applyShellState, shell.setDraftArchivePreferences, shellState.archive?.summary?.preferences, shellState.settings]);
+
   // Lock on hide
   useEffect(() => {
     const handler = () => {
@@ -397,47 +572,20 @@ function AppShell() {
     return () => document.removeEventListener("visibilitychange", handler);
   }, [shell.runTask, shellState.archive?.session?.effectivePolicy.lockOnHide, uiLocked]);
 
-  // Global drag-and-drop — web events for visual overlay + internal entry moves
   useEffect(() => {
-    function handleDragEnter(e: DragEvent) { e.preventDefault(); dragCounterRef.current += 1; if (dragCounterRef.current === 1) setIsDragOver(true); }
-    function handleDragLeave(e: DragEvent) { e.preventDefault(); dragCounterRef.current -= 1; if (dragCounterRef.current <= 0) { dragCounterRef.current = 0; setIsDragOver(false); } }
-    function handleDragOver(e: DragEvent) { e.preventDefault(); }
-    function handleDrop(e: DragEvent) {
-      e.preventDefault(); dragCounterRef.current = 0; setIsDragOver(false);
-      // Only handle internal archive entry moves here — OS file drops are handled by Tauri events below
-      if (!showArchiveView || uiLocked) return;
-      readArchiveDragPayload(e.dataTransfer);
-    }
-    window.addEventListener("dragenter", handleDragEnter);
-    window.addEventListener("dragleave", handleDragLeave);
-    window.addEventListener("dragover", handleDragOver);
-    window.addEventListener("drop", handleDrop);
-    return () => {
-      window.removeEventListener("dragenter", handleDragEnter);
-      window.removeEventListener("dragleave", handleDragLeave);
-      window.removeEventListener("dragover", handleDragOver);
-      window.removeEventListener("drop", handleDrop);
-    };
-  }, [showArchiveView, currentDirectory, uiLocked]);
+    const clearBreadcrumbDropTarget = () => setBreadcrumbDropTarget(null);
+    window.addEventListener("dragend", clearBreadcrumbDropTarget);
+    return () => window.removeEventListener("dragend", clearBreadcrumbDropTarget);
+  }, []);
 
   // Tauri native drag-and-drop — handles OS file drops with real paths
   useEffect(() => {
-    const detachEnter = window.stow.onDragEnter(() => {
-      dragCounterRef.current = 1;
-      setIsDragOver(true);
-    });
-    const detachLeave = window.stow.onDragLeave(() => {
-      dragCounterRef.current = 0;
-      setIsDragOver(false);
-    });
     const detachDrop = window.stow.onDragDrop(({ paths }) => {
-      dragCounterRef.current = 0;
-      setIsDragOver(false);
       if (!showArchiveView || uiLocked) return;
       if (paths.length > 0) queueUpload(paths, currentDirectory);
     });
-    return () => { detachEnter(); detachLeave(); detachDrop(); };
-  }, [showArchiveView, currentDirectory, uiLocked]);
+    return () => { detachDrop(); };
+  }, [showArchiveView, currentDirectory, queueUpload, uiLocked]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -485,36 +633,58 @@ function AppShell() {
       .filter((entry): entry is ArchiveEntryListItem => Boolean(entry))
     : [];
 
+  function handleBreadcrumbDragOver(path: string, e: React.DragEvent) {
+    if (!isArchiveEntryDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setBreadcrumbDropTarget(path);
+    e.dataTransfer.dropEffect = "move";
+  }
+
+  function handleBreadcrumbDragEnter(path: string, e: React.DragEvent) {
+    if (!isArchiveEntryDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setBreadcrumbDropTarget(path);
+    e.dataTransfer.dropEffect = "move";
+  }
+
+  async function handleBreadcrumbDrop(path: string, e: React.DragEvent) {
+    if (!isArchiveEntryDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setBreadcrumbDropTarget(null);
+    const payload = readArchiveDragPayload(e.dataTransfer);
+    if (payload && (payload.entryIds.length > 0 || payload.folderPaths.length > 0)) {
+      await moveArchiveEntries(payload, path);
+    }
+  }
+
+  function handleBreadcrumbDragLeave(path: string, e: React.DragEvent) {
+    if (!isArchiveEntryDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setBreadcrumbDropTarget((current) => (current === path ? null : current));
+  }
+
   return (
     <div className="app-shell">
-      {isDragOver && showArchiveView && (
-        <div className="drop-overlay">
-          <div className="drop-inner">
-            <strong>Drop to add files</strong>
-            <span>Release to start ingesting</span>
-          </div>
-        </div>
-      )}
       {shellState.installStatus.active && <InstallBanner installStatus={shellState.installStatus} />}
 
       {/* ── Topbar */}
       <header className="topbar">
         <div className="topbar-left">
-          <strong>{versionLabel}</strong>
-          {showArchiveView && (
-            <span className="topbar-status">{status === "Ready" ? "" : status}</span>
-          )}
-          {!showArchiveView && (
-            <span className="topbar-status">
-              {status !== "Ready"
-                ? status
-                : archiveUnlocked
-                  ? `Hub · ${archiveName_} open`
-                  : shellState.archive
-                    ? `Hub · ${shellState.archive.path}`
-                    : "No archive open"}
-            </span>
-          )}
+          <button
+            type="button"
+            className="topbar-brand"
+            disabled={uiLocked}
+            onClick={() => setActiveView("hub")}
+            title="Return to hub"
+            aria-label="Return to hub"
+          >
+            <span className="topbar-brand-title">Stow</span>
+            <span className="topbar-brand-version">v{packageJson.version}</span>
+          </button>
           {showArchiveView && <ProgressBar progress={progress} />}
         </div>
 
@@ -523,23 +693,45 @@ function AppShell() {
             <nav className="breadcrumb" aria-label="Archive path">
               <button
                 type="button"
-                className="breadcrumb-back"
+                className={`breadcrumb-back${breadcrumbDropTarget === parentDir && currentDirectory ? " breadcrumb-segment-drop-target" : ""}`}
                 disabled={uiLocked || !currentDirectory}
                 onClick={() => navigateToDirectory(parentDir)}
                 title="Go back"
                 aria-label="Go back"
+                onDragEnter={(e) => handleBreadcrumbDragEnter(parentDir, e)}
+                onDragOver={(e) => handleBreadcrumbDragOver(parentDir, e)}
+                onDragLeave={(e) => handleBreadcrumbDragLeave(parentDir, e)}
+                onDrop={(e) => { void handleBreadcrumbDrop(parentDir, e); }}
               >
                 ←
               </button>
-              <button type="button" className={`breadcrumb-segment${currentDirectory === "" ? " breadcrumb-segment-active" : ""}`}
-                disabled={uiLocked} onClick={() => navigateToDirectory("")}>
+              <button
+                type="button"
+                className={`breadcrumb-segment${currentDirectory === "" ? " breadcrumb-segment-active" : ""}${breadcrumbDropTarget === "" ? " breadcrumb-segment-drop-target" : ""}`}
+                disabled={uiLocked}
+                onClick={() => navigateToDirectory("")}
+                title={`Drop to move into ${archiveName_}`}
+                onDragEnter={(e) => handleBreadcrumbDragEnter("", e)}
+                onDragOver={(e) => handleBreadcrumbDragOver("", e)}
+                onDragLeave={(e) => handleBreadcrumbDragLeave("", e)}
+                onDrop={(e) => { void handleBreadcrumbDrop("", e); }}
+              >
                 {archiveName_}
               </button>
               {crumbs.map(crumb => (
                 <React.Fragment key={crumb.path}>
                   <span className="breadcrumb-separator" aria-hidden="true">›</span>
-                  <button type="button" className={`breadcrumb-segment${currentDirectory === crumb.path ? " breadcrumb-segment-active" : ""}`}
-                    disabled={uiLocked || currentDirectory === crumb.path} onClick={() => navigateToDirectory(crumb.path)}>
+                  <button
+                    type="button"
+                    className={`breadcrumb-segment${currentDirectory === crumb.path ? " breadcrumb-segment-active" : ""}${breadcrumbDropTarget === crumb.path ? " breadcrumb-segment-drop-target" : ""}`}
+                    disabled={uiLocked}
+                    onClick={() => navigateToDirectory(crumb.path)}
+                    title={`Drop to move into ${crumb.path}`}
+                    onDragEnter={(e) => handleBreadcrumbDragEnter(crumb.path, e)}
+                    onDragOver={(e) => handleBreadcrumbDragOver(crumb.path, e)}
+                    onDragLeave={(e) => handleBreadcrumbDragLeave(crumb.path, e)}
+                    onDrop={(e) => { void handleBreadcrumbDrop(crumb.path, e); }}
+                  >
                     {crumb.name}
                   </button>
                 </React.Fragment>
@@ -561,7 +753,6 @@ function AppShell() {
               <button type="button" disabled={uiLocked} onClick={() => setDetailOpen(v => !v)} title={detailOpen ? "Hide inspector" : "Show inspector"}>
                 {detailOpen ? "Inspector ✓" : "Inspector"}
               </button>
-              <button type="button" disabled={uiLocked} onClick={() => setLogOpen(v => !v)}>Log</button>
               <button type="button" disabled={uiLocked} onClick={() => setActiveView("hub")}>Hub</button>
               <button type="button" disabled={uiLocked} onClick={() => void shell.runTask("Locking archive", async () => {
                 const next = await window.stow.lockArchive();
@@ -593,7 +784,12 @@ function AppShell() {
       </header>
 
       {/* ── Main layout */}
-      <div className="main-layout">
+      <div
+        className="main-layout"
+        style={{
+          gridTemplateColumns: showActivityLogPanel ? "auto minmax(0, 1fr) auto auto" : "auto minmax(0, 1fr) auto"
+        }}
+      >
         {/* Tree sidebar (only when unlocked) — always render a slot to keep file-panel in column 2 */}
         {showArchiveView ? (
           <TreeSidebar
@@ -677,6 +873,7 @@ function AppShell() {
               onUnlockPasswordChange={setUnlockPassword}
               onUnlock={() => void shell.runTask("Opening archive", () => window.stow.openArchive({ archivePath: shellState.archive?.path ?? openArchivePath, password: unlockPassword }))}
               onClickEntry={handleClickEntry}
+              onToggleEntrySelection={handleToggleEntrySelection}
               onDoubleClickEntry={handleDoubleClickEntry}
               onContextMenu={handleContextMenu}
               onDragStart={handleDragStart}
@@ -704,13 +901,14 @@ function AppShell() {
             selectedEntry={selectedEntry}
             preview={preview}
             detailRevision={detailRevision}
-            overrideMode={overrideMode}
+            overrideMode={effectiveOverrideMode}
+            canReprocessLossless={canReprocessLossless}
             isBusy={isBusy}
             onClose={() => setDetailOpen(false)}
             onOpen={() => { if (singleSelectedId) void openEntryExternally(singleSelectedId); }}
             onExportOriginal={() => { if (singleSelectedId) void exportEntry(singleSelectedId, "original"); }}
             onExportOptimized={() => { if (singleSelectedId) void exportEntry(singleSelectedId, "optimized"); }}
-            onReprocess={() => { if (singleSelectedId) void reprocessEntry(singleSelectedId, overrideMode); }}
+            onReprocess={() => { if (singleSelectedId) void reprocessEntry(singleSelectedId, effectiveOverrideMode); }}
             onDelete={() => { if (singleSelectedId) requestDelete([singleSelectedId]); }}
             onOverrideModeChange={setOverrideMode}
             onBulkDelete={() => requestDelete([...selectedIds])}
@@ -719,6 +917,8 @@ function AppShell() {
         ) : (
           <div style={{ width: 0 }} />
         )}
+
+        {showActivityLogPanel ? <ActivityLogPanel logs={shellState.logs} /> : null}
       </div>
 
       {/* ── Status bar */}
@@ -789,9 +989,6 @@ function AppShell() {
             }}
           />
       )}
-
-      {/* ── Log drawer */}
-      {logOpen && <LogDrawer logs={shellState.logs} onClose={() => setLogOpen(false)} />}
 
       {/* ── Dialogs */}
       <ArchiveManagerDialog
@@ -867,17 +1064,14 @@ function AppShell() {
         draftPrefs={draftArchivePreferences}
         isBusy={isBusy}
         capabilities={shellState.capabilities}
-        archiveUnlocked={archiveUnlocked}
         installStatus={shellState.installStatus}
         onClose={closeSettingsDialog}
         onChange={shell.setDraftSettings}
         onChangePrefs={applyArchivePreferences}
-        onSave={() => void shell.runTask("Saving settings", async () => { const next = await window.stow.saveSettings(draftSettings); setSettingsOpen(false); return next; })}
-        onReset={() => void shell.runTask("Restoring defaults", async () => { const next = await window.stow.resetSettings(); shell.setDraftArchivePreferences(toArchivePreferences(next.settings)); return next; })}
-        onSaveArchivePolicy={() => void saveArchivePreferences()}
-        onInstallMissingTools={() => void shell.runTask("Installing missing tools", async () => window.stow.installMissingTools())}
-      />
-    </div>
+      onReset={() => void shell.runTask("Restoring defaults", async () => { const next = await window.stow.resetSettings(); shell.setDraftArchivePreferences(toArchivePreferences(next.settings)); return next; })}
+      onInstallMissingTools={() => void shell.runTask("Installing missing tools", async () => window.stow.installMissingTools())}
+    />
+  </div>
   );
 }
 

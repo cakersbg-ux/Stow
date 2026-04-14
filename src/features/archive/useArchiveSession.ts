@@ -91,7 +91,7 @@ export type ArchiveSession = {
   moveEntries: (payload: { entryIds: string[]; destinationDirectory: string }) => Promise<void>;
   exportEntry: (entryId: string, variant: "original" | "optimized") => Promise<void>;
   exportEntries: (entryIds: string[], variant: "original" | "optimized") => Promise<void>;
-  reprocessEntry: (entryId: string, overrideMode: "lossless" | "visually_lossless") => Promise<void>;
+  reprocessEntry: (entryId: string, overrideMode: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive") => Promise<void>;
 };
 
 function clearSelectionState(setSelectedIds: Dispatch<SetStateAction<Set<string>>>, setFocusedId: Dispatch<SetStateAction<string | null>>, setLastClickedId: Dispatch<SetStateAction<string | null>>) {
@@ -122,6 +122,8 @@ export function useArchiveSession({
   const [sortColumn, setSortColumn] = useState<SortColumn>("name");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const renameSelectionAppliedRef = useRef(false);
+  const suppressNextRenameRefreshRef = useRef(false);
   const lastArchiveIdRef = useRef<string | null>(null);
   const hasInitializedRef = useRef(false);
   const skipNextRefreshRef = useRef(false);
@@ -147,6 +149,42 @@ export function useArchiveSession({
   const cancelRename = useCallback(() => {
     setRenamingEntryId(null);
     setRenameDraft("");
+    renameSelectionAppliedRef.current = false;
+  }, []);
+
+  const applyRenamedEntryLocally = useCallback((entryId: string, nextName: string) => {
+    setPageCache((current) => {
+      let changed = false;
+      const pages = new Map<number, ArchiveEntryListItem[]>();
+      for (const [offset, items] of current.pages.entries()) {
+        const nextItems = items.map((item) => {
+          if (!item || item.id !== entryId) {
+            return item;
+          }
+          changed = true;
+          const parentPath = parentDirectory(item.relativePath);
+          return {
+            ...item,
+            name: nextName,
+            relativePath: joinArchivePath(parentPath, nextName)
+          };
+        });
+        pages.set(offset, changed ? nextItems : items);
+      }
+      return changed ? { ...current, pages } : current;
+    });
+
+    setSelectedEntry((current) => {
+      if (!current || current.id !== entryId) {
+        return current;
+      }
+      const parentPath = parentDirectory(current.relativePath);
+      return {
+        ...current,
+        name: nextName,
+        relativePath: joinArchivePath(parentPath, nextName)
+      };
+    });
   }, []);
 
   const navigateToDirectory = useCallback((path: string) => {
@@ -241,6 +279,9 @@ export function useArchiveSession({
     if (!archiveUnlocked || payload.archiveId !== archiveId) {
       return;
     }
+    if (suppressNextRenameRefreshRef.current) {
+      return;
+    }
     void refreshArchiveData(payload.selectedEntryId ?? singleSelectedIdRef.current);
   }, [archiveId, archiveUnlocked, refreshArchiveData]);
 
@@ -303,16 +344,27 @@ export function useArchiveSession({
       setPreview(null);
       return;
     }
+    const selectedItem = entries.find((entry) => entry?.id === singleSelectedId);
+    if (!selectedItem || selectedItem.entryType !== "file") {
+      setSelectedEntry(null);
+      setPreview(null);
+      return;
+    }
     let cancelled = false;
     void window.stow.getEntryDetail(singleSelectedId).then((detail) => {
       if (!cancelled) {
         setSelectedEntry(detail);
       }
+    }).catch(() => {
+      if (!cancelled) {
+        setSelectedEntry(null);
+        setPreview(null);
+      }
     });
     return () => {
       cancelled = true;
     };
-  }, [archiveUnlocked, singleSelectedId]);
+  }, [archiveUnlocked, entries, singleSelectedId]);
 
   useEffect(() => {
     if (!selectedEntry) {
@@ -324,21 +376,29 @@ export function useArchiveSession({
       if (!cancelled) {
         setPreview(descriptor);
       }
+    }).catch(() => {
+      if (!cancelled) {
+        setPreview(null);
+      }
     });
     return () => {
       cancelled = true;
     };
-  }, [selectedEntry?.id, selectedEntry?.latestRevisionId]);
+  }, [selectedEntry?.id, selectedEntry?.latestRevisionId, detailRevision?.optimizationState, detailRevision?.preferredArtifact?.contentHash]);
 
   useEffect(() => {
-    if (!renamingEntryId || !renameInputRef.current) {
+    if (!renamingEntryId || !renameInputRef.current || renameSelectionAppliedRef.current) {
       return;
     }
     const input = renameInputRef.current;
     const frame = window.requestAnimationFrame(() => {
+      if (renameInputRef.current !== input) {
+        return;
+      }
       input.focus();
       const entry = entries.find((item) => item?.id === renamingEntryId);
       input.setSelectionRange(0, baseNameSelectionEnd(renameDraft || entry?.name || ""));
+      renameSelectionAppliedRef.current = true;
     });
     return () => window.cancelAnimationFrame(frame);
   }, [entries, renameDraft, renamingEntryId]);
@@ -419,6 +479,7 @@ export function useArchiveSession({
     }
     setRenamingEntryId(entryId);
     setRenameDraft(entry.name);
+    renameSelectionAppliedRef.current = false;
   }, [entries, isBusy, singleSelectedId]);
 
   const submitRename = useCallback(async () => {
@@ -433,12 +494,20 @@ export function useArchiveSession({
       cancelRename();
       return;
     }
-    await runTask("Renaming", async () => {
-      const next = await window.stow.renameEntry(renamingEntryId, nextName);
-      cancelRename();
-      return next;
-    });
-  }, [cancelRename, entries, isBusy, renameDraft, renamingEntryId, runTask, setStatus]);
+    suppressNextRenameRefreshRef.current = true;
+    try {
+      await runTask("Renaming", async () => {
+        const next = await window.stow.renameEntry(renamingEntryId, nextName);
+        applyRenamedEntryLocally(renamingEntryId, nextName);
+        cancelRename();
+        return next;
+      });
+    } finally {
+      window.setTimeout(() => {
+        suppressNextRenameRefreshRef.current = false;
+      }, 0);
+    }
+  }, [applyRenamedEntryLocally, cancelRename, entries, isBusy, renameDraft, renamingEntryId, runTask, setStatus]);
 
   const createFolder = useCallback(async (name: string) => {
     if (!archiveUnlocked || isBusy) return;
@@ -501,7 +570,7 @@ export function useArchiveSession({
     await runTask("Exporting files", () => window.stow.exportEntries(entryIds, variant));
   }, [isBusy, runTask]);
 
-  const reprocessEntry = useCallback(async (entryId: string, overrideMode: "lossless" | "visually_lossless") => {
+  const reprocessEntry = useCallback(async (entryId: string, overrideMode: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive") => {
     if (isBusy) return;
     await runTask("Reprocessing", () => window.stow.reprocessEntry(entryId, overrideMode));
   }, [isBusy, runTask]);

@@ -95,11 +95,60 @@ function validateRevisionRecord(revision, index) {
       ? null
       : (() => {
           const value = assertNonEmptyString(normalizedRevision.overrideMode, `revision ${index} override mode`);
-          if (!["lossless", "visually_lossless"].includes(value)) {
+          if (!["lossless", "visually_lossless", "lossy_balanced", "lossy_aggressive"].includes(value)) {
             throw new Error(`revision ${index} override mode is invalid`);
           }
           return value;
         })();
+  const optimizationTier =
+    normalizedRevision.optimizationTier === null || typeof normalizedRevision.optimizationTier === "undefined"
+      ? overrideMode
+      : (() => {
+          const value = assertNonEmptyString(normalizedRevision.optimizationTier, `revision ${index} optimization tier`);
+          if (!["lossless", "visually_lossless", "lossy_balanced", "lossy_aggressive"].includes(value)) {
+            throw new Error(`revision ${index} optimization tier is invalid`);
+          }
+          return value;
+        })();
+  const artifactRetentionPolicy =
+    normalizedRevision.artifactRetentionPolicy === null || typeof normalizedRevision.artifactRetentionPolicy === "undefined"
+      ? null
+      : (() => {
+          const value = assertNonEmptyString(normalizedRevision.artifactRetentionPolicy, `revision ${index} artifact retention policy`);
+          if (!["keep_source", "drop_source_after_optimize"].includes(value)) {
+            throw new Error(`revision ${index} artifact retention policy is invalid`);
+          }
+          return value;
+        })();
+  const optimizationState =
+    normalizedRevision.optimizationState === null || typeof normalizedRevision.optimizationState === "undefined"
+      ? null
+      : (() => {
+          const value = assertNonEmptyString(normalizedRevision.optimizationState, `revision ${index} optimization state`);
+          if (!["pending_optimization", "optimized", "failed"].includes(value)) {
+            throw new Error(`revision ${index} optimization state is invalid`);
+          }
+          return value;
+        })();
+  const sourceArtifact =
+    normalizedRevision.sourceArtifact === null || typeof normalizedRevision.sourceArtifact === "undefined"
+      ? null
+      : validateArtifactDescriptor(normalizedRevision.sourceArtifact, `revision ${index} source artifact`);
+  const preferredArtifact =
+    normalizedRevision.preferredArtifact === null || typeof normalizedRevision.preferredArtifact === "undefined"
+      ? null
+      : validateArtifactDescriptor(normalizedRevision.preferredArtifact, `revision ${index} preferred artifact`);
+  const legacyOriginalArtifact =
+    normalizedRevision.originalArtifact === null || typeof normalizedRevision.originalArtifact === "undefined"
+      ? null
+      : validateArtifactDescriptor(normalizedRevision.originalArtifact, `revision ${index} original artifact`);
+  const legacyOptimizedArtifact =
+    normalizedRevision.optimizedArtifact === null || typeof normalizedRevision.optimizedArtifact === "undefined"
+      ? null
+      : validateArtifactDescriptor(normalizedRevision.optimizedArtifact, `revision ${index} optimized artifact`);
+  const resolvedSourceArtifact = sourceArtifact || null;
+  const resolvedPreferredArtifact =
+    preferredArtifact || legacyOptimizedArtifact || legacyOriginalArtifact || null;
   const actions = Array.isArray(normalizedRevision.actions)
     ? normalizedRevision.actions.map((action, actionIndex) => assertNonEmptyString(action, `revision ${index} action ${actionIndex}`))
     : [];
@@ -113,13 +162,22 @@ function validateRevisionRecord(revision, index) {
       ? normalizedRevision.media
       : {},
     overrideMode,
+    optimizationTier,
+    artifactRetentionPolicy,
+    optimizationState,
     summary: assertNonEmptyString(normalizedRevision.summary, `revision ${index} summary`),
     actions,
-    originalArtifact: validateArtifactDescriptor(normalizedRevision.originalArtifact, `revision ${index} original artifact`),
-    optimizedArtifact:
-      normalizedRevision.optimizedArtifact === null || typeof normalizedRevision.optimizedArtifact === "undefined"
-        ? null
-        : validateArtifactDescriptor(normalizedRevision.optimizedArtifact, `revision ${index} optimized artifact`)
+    sourceArtifact: resolvedSourceArtifact,
+    preferredArtifact: resolvedPreferredArtifact,
+    derivativeArtifacts: Array.isArray(normalizedRevision.derivativeArtifacts)
+      ? normalizedRevision.derivativeArtifacts.map((artifact, artifactIndex) =>
+          validateArtifactDescriptor(artifact, `revision ${index} derivative artifact ${artifactIndex}`)
+        )
+      : [],
+    originalArtifact: resolvedSourceArtifact || legacyOriginalArtifact || resolvedPreferredArtifact,
+    optimizedArtifact: resolvedSourceArtifact && resolvedPreferredArtifact && resolvedPreferredArtifact !== resolvedSourceArtifact
+      ? resolvedPreferredArtifact
+      : null
   };
 }
 

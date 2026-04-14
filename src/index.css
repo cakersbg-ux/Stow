@@ -213,9 +213,33 @@ h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary);
   gap: 8px;
   min-width: 0;
 }
-.topbar-left strong {
+.topbar-brand {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  appearance: none;
+}
+.topbar-brand:not(:disabled):hover {
+  background: transparent;
+  color: var(--text-primary);
+}
+.topbar-brand-title {
   font-size: 12px;
   font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+.topbar-brand-version {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text-tertiary);
   white-space: nowrap;
 }
 .topbar-center {
@@ -234,14 +258,6 @@ h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary);
   font-size: 11px;
   padding: 3px 8px;
 }
-.topbar-status {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* ─── Breadcrumb ────────────────────────────────────── */
 .breadcrumb {
   display: flex;
@@ -290,6 +306,12 @@ h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary);
 .breadcrumb-segment-active {
   color: var(--text-primary);
   cursor: default;
+}
+.breadcrumb-segment-drop-target {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  cursor: copy;
 }
 .breadcrumb-separator {
   color: var(--text-tertiary);
@@ -655,7 +677,57 @@ h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary);
   flex-wrap: wrap;
   gap: 4px;
 }
-.detail-actions button { font-size: 11px; padding: 3px 8px; }
+.detail-actions-primary {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1.1fr);
+}
+.detail-actions-primary button {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.detail-actions button {
+  font-size: 11px;
+  padding: 4px 10px;
+  min-height: 26px;
+}
+.detail-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+.detail-action-neutral {
+  background: var(--surface-1);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+.detail-action-neutral:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.detail-action-accent {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.detail-action-accent:hover:not(:disabled) {
+  background: var(--accent-subtle);
+  border-color: var(--accent-hover);
+}
+.detail-action-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.detail-action-danger:hover:not(:disabled) {
+  background: #e65b5b;
+  border-color: #e65b5b;
+}
 .detail-bulk-summary {
   display: flex;
   flex-direction: column;
@@ -670,6 +742,80 @@ h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary);
   color: var(--text-secondary);
 }
 .detail-revision-list li + li { margin-top: 1px; }
+
+/* ─── Activity log panel ────────────────────────────── */
+.activity-log-panel {
+  width: 360px;
+  min-width: 320px;
+  border-left: 1px solid #101010;
+  background: #000;
+  color: #c8d0d5;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: var(--font-mono);
+}
+.activity-log-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-bottom: 1px solid #111;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0));
+}
+.activity-log-kicker {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #55636a;
+}
+.activity-log-header h2 {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #f2f6f7;
+}
+.activity-log-count {
+  font-size: 10px;
+  color: #667981;
+  white-space: nowrap;
+}
+.activity-log-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px 12px;
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.activity-log-empty {
+  color: #667981;
+  padding: 6px 0;
+}
+.activity-log-line {
+  display: grid;
+  grid-template-columns: 134px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.activity-log-time {
+  color: #4f626a;
+  white-space: nowrap;
+}
+.activity-log-text {
+  color: #c8d0d5;
+}
+.activity-log-line-neutral .activity-log-text { color: #c8d0d5; }
+.activity-log-line-info .activity-log-text { color: #7fd2ff; }
+.activity-log-line-success .activity-log-text { color: #7fe6a8; }
+.activity-log-line-warning .activity-log-text { color: #ffd37a; }
+.activity-log-line-danger .activity-log-text { color: #ff8d8d; }
 
 /* ─── Status bar (bottom) ───────────────────────────── */
 .status-bar {
@@ -1017,13 +1163,13 @@ h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary);
 
 /* ─── Primary button ────────────────────────────────── */
 .btn-primary {
-  background: var(--accent);
+  background: var(--accent-muted);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent);
   font-weight: 600;
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--accent-subtle);
   border-color: var(--accent-hover);
 }
 
@@ -1096,31 +1242,6 @@ h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary);
   font-size: 11px;
   color: var(--text-secondary);
 }
-
-/* ─── Drop zone ─────────────────────────────────────── */
-.drop-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 2000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.85);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  animation: fade-in 120ms ease;
-}
-.drop-inner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 40px 56px;
-  border: 2px dashed var(--accent);
-  border-radius: var(--radius-lg);
-}
-.drop-inner strong { font-size: 16px; font-weight: 700; }
-.drop-inner span { color: var(--text-secondary); font-size: 13px; }
 
 /* ─── Hub ───────────────────────────────────────────── */
 .hub {
@@ -1279,41 +1400,6 @@ h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary);
   font-size: 12px;
 }
 
-/* ─── Log panel (drawer) ────────────────────────────── */
-.log-drawer {
-  position: fixed;
-  right: 0;
-  bottom: 28px;
-  width: min(420px, 100vw);
-  max-height: 300px;
-  border: 1px solid var(--border-strong);
-  border-right: 0;
-  border-bottom: 0;
-  border-radius: var(--radius-lg) 0 0 0;
-  background: var(--surface-2);
-  box-shadow: var(--shadow-dialog);
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  z-index: 900;
-  animation: slide-up 200ms ease;
-}
-.log-drawer-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-default);
-}
-.log-drawer-body {
-  overflow: auto;
-  padding: 8px 12px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-.log-drawer-body > div { white-space: pre-wrap; word-break: break-all; }
-
 /* ─── Animations ────────────────────────────────────── */
 @keyframes fade-in {
   from { opacity: 0; }
@@ -1332,6 +1418,7 @@ h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary);
 @media (max-width: 900px) {
   .tree-sidebar { display: none; }
   .detail-panel { display: none; }
+  .activity-log-panel { display: none; }
   .main-layout { grid-template-columns: minmax(0, 1fr); }
   .hub-col-header { grid-template-columns: minmax(0, 1fr) 90px 70px; }
   .hub-row { grid-template-columns: minmax(0, 1fr) 90px 70px; }

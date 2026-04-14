@@ -1,6 +1,7 @@
 export type Settings = {
   compressionBehavior: "fast" | "balanced" | "max";
-  optimizationMode: "lossless" | "visually_lossless" | "pick_per_file";
+  optimizationTier: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive";
+  optimizationMode?: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive" | "pick_per_file";
   stripDerivativeMetadata: boolean;
   deleteOriginalFilesAfterSuccessfulUpload: boolean;
   argonProfile: "balanced" | "strong" | "constrained";
@@ -8,9 +9,15 @@ export type Settings = {
   themePreference: "system" | "light" | "dark";
   sessionIdleMinutes: number;
   sessionLockOnHide: boolean;
+  developerActivityLogEnabled: boolean;
 };
 
-export type ArchivePreferences = Pick<Settings, "compressionBehavior" | "optimizationMode" | "stripDerivativeMetadata">;
+export type ArchivePreferences = {
+  compressionBehavior: Settings["compressionBehavior"];
+  optimizationTier?: Settings["optimizationTier"];
+  optimizationMode?: Settings["optimizationMode"];
+  stripDerivativeMetadata: Settings["stripDerivativeMetadata"];
+};
 
 export type RecentArchive = {
   path: string;
@@ -74,10 +81,30 @@ export type ArchiveRevision = {
     height?: number | null;
     codec?: string | null;
   };
-  overrideMode?: "lossless" | "visually_lossless" | null;
+  overrideMode?: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive" | null;
+  optimizationTier?: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive" | null;
+  artifactRetentionPolicy?: "keep_source" | "drop_source_after_optimize" | null;
+  optimizationState?: "pending_optimization" | "optimized" | "failed" | null;
+  optimizationDecision?: {
+    plannerVersion: string;
+    selectedCandidateId: string | null;
+    candidateMetrics: Array<{
+      id: string;
+      label: string;
+      size: number;
+      estimatedQuality: number;
+      reversible: boolean;
+      accepted: boolean;
+      reason?: string;
+    }>;
+    sourceSummary: string;
+  } | null;
   summary: string;
   actions: string[];
-  originalArtifact: ArtifactDescriptor;
+  sourceArtifact?: ArtifactDescriptor | null;
+  preferredArtifact?: ArtifactDescriptor | null;
+  derivativeArtifacts?: ArtifactDescriptor[];
+  originalArtifact?: ArtifactDescriptor;
   optimizedArtifact?: ArtifactDescriptor | null;
 };
 
@@ -91,7 +118,8 @@ export type ArchiveEntryListItem = {
   size: number | null;
   sourceSize: number | null;
   latestRevisionId: string | null;
-  overrideMode: "lossless" | "visually_lossless" | null;
+  overrideMode: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive" | null;
+  optimizationState?: "pending_optimization" | "optimized" | "failed" | null;
   previewable: boolean;
   childCount: number | null;
 };
@@ -111,6 +139,7 @@ export type ArchiveEntryDetail = {
     original: boolean;
     optimized: boolean;
   };
+  optimizationState?: "pending_optimization" | "optimized" | "failed" | null;
 };
 
 export type ArchiveStats = {
@@ -126,6 +155,7 @@ export type PreviewDescriptor = {
   mime: string;
   revisionId: string;
   kind: "thumbnail" | "preview";
+  updatedAt?: string;
 };
 
 export type ArchiveSessionInfo = {
@@ -209,7 +239,7 @@ declare global {
       }) => Promise<{ total: number; items: ArchiveEntryListItem[] }>;
       getEntryDetail: (entryId: string) => Promise<ArchiveEntryDetail>;
       getArchiveStats: () => Promise<ArchiveStats>;
-      reprocessEntry: (entryId: string, overrideMode: "lossless" | "visually_lossless") => Promise<AppShellState>;
+      reprocessEntry: (entryId: string, overrideMode: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive") => Promise<AppShellState>;
       deleteEntry: (entryId: string) => Promise<AppShellState>;
       deleteFolder: (relativePath: string) => Promise<AppShellState>;
       renameEntry: (entryId: string, name: string) => Promise<AppShellState>;

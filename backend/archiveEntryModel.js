@@ -33,9 +33,36 @@ function getLatestRevision(entry) {
   return entry.revisions.find((candidate) => candidate.id === entry.latestRevisionId) ?? entry.revisions[0] ?? null;
 }
 
+function artifactSignature(artifact) {
+  if (!artifact) {
+    return null;
+  }
+  return [artifact.contentHash, artifact.size, artifact.label, artifact.extension].join(":");
+}
+
+function artifactsEquivalent(left, right) {
+  const leftSignature = artifactSignature(left);
+  const rightSignature = artifactSignature(right);
+  return Boolean(leftSignature && rightSignature && leftSignature === rightSignature);
+}
+
+function getRevisionSourceArtifact(revision) {
+  if (revision?.sourceArtifact) {
+    return revision.sourceArtifact;
+  }
+  if (revision?.originalArtifact && !artifactsEquivalent(revision.originalArtifact, revision.preferredArtifact)) {
+    return revision.originalArtifact;
+  }
+  return null;
+}
+
+function getRevisionPreferredArtifact(revision) {
+  return revision?.preferredArtifact ?? revision?.optimizedArtifact ?? revision?.originalArtifact ?? null;
+}
+
 function getEntryDisplaySize(entry) {
   const latestRevision = getLatestRevision(entry);
-  return latestRevision?.optimizedArtifact?.size ?? latestRevision?.originalArtifact?.size ?? entry.size;
+  return getRevisionPreferredArtifact(latestRevision)?.size ?? getRevisionSourceArtifact(latestRevision)?.size ?? entry.size;
 }
 
 function getEntryPreviewKind(entry) {
@@ -61,6 +88,8 @@ function buildLightweightEntry(entry) {
     sourceSize: entry.size,
     latestRevisionId: entry.latestRevisionId,
     overrideMode: latestRevision?.overrideMode ?? null,
+    optimizationTier: latestRevision?.optimizationTier ?? null,
+    optimizationState: latestRevision?.optimizationState ?? null,
     previewable: Boolean(getEntryPreviewKind(entry)),
     childCount: null
   };
@@ -88,13 +117,15 @@ function normalizePersistedSummaryEntries(summaryIndex) {
 
 function buildEntryDetail(entry) {
   const latestRevision = getLatestRevision(entry);
+  const sourceArtifact = getRevisionSourceArtifact(latestRevision);
+  const preferredArtifact = getRevisionPreferredArtifact(latestRevision);
   return {
     ...entry,
     size: getEntryDisplaySize(entry),
     sourceSize: entry.size,
     exportableVariants: {
-      original: true,
-      optimized: Boolean(latestRevision?.optimizedArtifact)
+      original: Boolean(sourceArtifact),
+      optimized: Boolean(preferredArtifact) && (!sourceArtifact || preferredArtifact.contentHash !== sourceArtifact.contentHash || preferredArtifact.size !== sourceArtifact.size)
     }
   };
 }
@@ -108,6 +139,8 @@ module.exports = {
   getEntryDisplaySize,
   getEntryPreviewKind,
   getLatestRevision,
+  getRevisionPreferredArtifact,
+  getRevisionSourceArtifact,
   normalizePersistedSummaryEntries,
   parentArchivePath,
   parseFolderEntryId

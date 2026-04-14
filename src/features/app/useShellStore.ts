@@ -27,7 +27,6 @@ export type ShellStore = {
   entriesInvalidated: ArchiveEntriesInvalidatedPayload | null;
   applyShellState: (next: AppShellState) => void;
   applyArchivePreferences: (next: ArchivePreferences) => void;
-  resetDraftSettings: () => void;
   setDraftSettings: Dispatch<SetStateAction<Settings>>;
   setDraftArchivePreferences: Dispatch<SetStateAction<ArchivePreferences>>;
   setStatus: Dispatch<SetStateAction<string>>;
@@ -56,11 +55,6 @@ export function useShellStore(): ShellStore {
     setDraftArchivePreferences(next);
     setDraftSettings((current) => mergePrefs(current, next));
   }, []);
-
-  const resetDraftSettings = useCallback(() => {
-    setDraftSettings(shellState.settings);
-    setDraftArchivePreferences(shellState.archive?.summary?.preferences ?? toArchivePreferences(shellState.settings));
-  }, [shellState.archive?.summary?.preferences, shellState.settings]);
 
   const runTask = useCallback<RunTask>(async (label, task) => {
     setIsBusy(true);
@@ -135,7 +129,6 @@ export function useShellStore(): ShellStore {
     entriesInvalidated,
     applyShellState,
     applyArchivePreferences,
-    resetDraftSettings,
     setDraftSettings,
     setDraftArchivePreferences,
     setStatus,
