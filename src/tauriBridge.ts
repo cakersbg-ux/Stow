@@ -8,12 +8,12 @@ import type {
   ArchiveProgress,
   ArchiveStats,
   DetectedArchive,
+  ExportRequest,
   PreviewDescriptor,
   Settings
 } from "./types";
 
 type OverrideMode = "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive";
-type ExportVariant = "original" | "optimized";
 
 function createListener<T>(eventName: string, listener: (payload: T) => void) {
   let detach: (() => void) | null = null;
@@ -93,10 +93,20 @@ const bridge = {
   deleteEntries: (entryIds: string[]) => invoke<AppShellState>("archive_delete_entries", { payload: { entryIds } }),
   moveEntries: (payload: { entryIds: string[]; destinationDirectory: string }) =>
     invoke<AppShellState>("archive_move_entries", { payload }),
-  exportEntries: (entryIds: string[], variant: ExportVariant) =>
-    invoke<AppShellState>("archive_export_entries", { payload: { entryIds, variant } }),
-  exportEntry: (entryId: string, variant: ExportVariant) =>
-    invoke<AppShellState>("archive_export_entry", { payload: { entryId, variant } }),
+  exportEntries: (request: ExportRequest) =>
+    invoke<AppShellState>("archive_export_entries", { payload: request }),
+  exportEntry: (request: ExportRequest) => {
+    const firstEntry = request.entries[0];
+    return invoke<AppShellState>("archive_export_entry", {
+      payload: {
+        entryId: firstEntry?.entryId || "",
+        exportOptionId: firstEntry?.exportOptionId ?? null,
+        destination: request.destination,
+        preservePaths: request.preservePaths,
+        removeFromArchive: request.removeFromArchive
+      }
+    });
+  },
   openEntryExternally: (entryId: string) => invoke<AppShellState>("archive_open_entry_externally", { payload: { entryId } }),
   resolveEntryPreview: async (entryId: string, previewKind: "thumbnail" | "preview" = "preview") => {
     const descriptor = await invoke<PreviewDescriptor | null>("archive_resolve_entry_preview", { payload: { entryId, previewKind } });

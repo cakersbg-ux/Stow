@@ -743,9 +743,19 @@ struct MoveEntryPayload {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ExportPlanEntryPayload {
+    entry_id: String,
+    export_option_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ExportEntryPayload {
     entry_id: String,
-    variant: String,
+    export_option_id: Option<String>,
+    destination: String,
+    preserve_paths: Option<bool>,
+    remove_from_archive: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -764,8 +774,10 @@ struct MoveEntriesPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExportEntriesPayload {
-    entry_ids: Vec<String>,
-    variant: String,
+    entries: Vec<ExportPlanEntryPayload>,
+    destination: String,
+    preserve_paths: Option<bool>,
+    remove_from_archive: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1118,26 +1130,20 @@ async fn archive_export_entries(
     state: State<'_, AppState>,
     payload: ExportEntriesPayload,
 ) -> Result<Value, String> {
-    let destination = tauri::async_runtime::spawn_blocking(pick_directory_sync)
-        .await
-        .map_err(|error| format!("failed to open export dialog: {error}"))?;
-
-    let backend = Arc::clone(&state.backend);
-
-    if let Some(destination) = destination {
-        backend_call(
-            backend,
-            "archive:export-entries",
-            json!({
-                "entryIds": payload.entry_ids,
-                "variant": payload.variant,
-                "destination": destination
-            }),
-        )
-        .await
-    } else {
-        backend_call(backend, "app:get-shell-state", Value::Null).await
-    }
+    backend_call(
+        Arc::clone(&state.backend),
+        "archive:export-entries",
+        json!({
+            "entries": payload.entries.into_iter().map(|entry| json!({
+                "entryId": entry.entry_id,
+                "exportOptionId": entry.export_option_id
+            })).collect::<Vec<Value>>(),
+            "destination": payload.destination,
+            "preservePaths": payload.preserve_paths,
+            "removeFromArchive": payload.remove_from_archive
+        }),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1145,26 +1151,18 @@ async fn archive_export_entry(
     state: State<'_, AppState>,
     payload: ExportEntryPayload,
 ) -> Result<Value, String> {
-    let destination = tauri::async_runtime::spawn_blocking(pick_directory_sync)
-        .await
-        .map_err(|error| format!("failed to open export dialog: {error}"))?;
-
-    let backend = Arc::clone(&state.backend);
-
-    if let Some(destination) = destination {
-        backend_call(
-            backend,
-            "archive:export-entry",
-            json!({
-                "entryId": payload.entry_id,
-                "variant": payload.variant,
-                "destination": destination
-            }),
-        )
-        .await
-    } else {
-        backend_call(backend, "app:get-shell-state", Value::Null).await
-    }
+    backend_call(
+        Arc::clone(&state.backend),
+        "archive:export-entry",
+        json!({
+            "entryId": payload.entry_id,
+            "exportOptionId": payload.export_option_id,
+            "destination": payload.destination,
+            "preservePaths": payload.preserve_paths,
+            "removeFromArchive": payload.remove_from_archive
+        }),
+    )
+    .await
 }
 
 #[tauri::command]

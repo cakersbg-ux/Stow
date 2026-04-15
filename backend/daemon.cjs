@@ -298,13 +298,20 @@ async function handleCommand(method, payload) {
 
     case "archive:export-entries":
       await ensureInteractive();
-      await archiveService.exportEntries(payload.entryIds || [], payload.variant, payload.destination);
+      await archiveService.exportEntries(payload.entries || [], payload.destination, {
+        preservePaths: payload.preservePaths,
+        removeFromArchive: payload.removeFromArchive
+      });
       emitShellStateUpdate();
       return sanitizeShellState(state);
 
     case "archive:export-entry":
       await ensureInteractive();
-      await archiveService.exportEntry(payload.entryId, payload.variant, payload.destination);
+      await archiveService.exportEntry(payload.entryId, payload.destination, {
+        exportOptionId: payload.exportOptionId,
+        preservePaths: payload.preservePaths,
+        removeFromArchive: payload.removeFromArchive
+      });
       emitShellStateUpdate();
       return sanitizeShellState(state);
 

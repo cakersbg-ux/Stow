@@ -5,6 +5,7 @@ import type {
   ArchiveEntryDetail,
   ArchiveEntryListItem,
   ArchiveStats,
+  ExportRequest,
   PreviewDescriptor
 } from "../../types";
 import {
@@ -20,6 +21,7 @@ import {
   getVisibleEntries,
   isModKey,
   joinArchivePath,
+  parentDirectory,
   resolveDetailRevision,
   resolveRangeSelection,
   type ArchiveDragPayload,
@@ -89,8 +91,8 @@ export type ArchiveSession = {
   deleteEntries: (entryIds: string[]) => Promise<void>;
   moveEntry: (entryId: string, destinationDirectory: string) => Promise<void>;
   moveEntries: (payload: { entryIds: string[]; destinationDirectory: string }) => Promise<void>;
-  exportEntry: (entryId: string, variant: "original" | "optimized") => Promise<void>;
-  exportEntries: (entryIds: string[], variant: "original" | "optimized") => Promise<void>;
+  exportEntry: (request: ExportRequest) => Promise<void>;
+  exportEntries: (request: ExportRequest) => Promise<void>;
   reprocessEntry: (entryId: string, overrideMode: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive") => Promise<void>;
 };
 
@@ -124,6 +126,7 @@ export function useArchiveSession({
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const renameSelectionAppliedRef = useRef(false);
   const suppressNextRenameRefreshRef = useRef(false);
+  const renameSubmitInFlightRef = useRef(false);
   const lastArchiveIdRef = useRef<string | null>(null);
   const hasInitializedRef = useRef(false);
   const skipNextRefreshRef = useRef(false);
@@ -483,15 +486,18 @@ export function useArchiveSession({
   }, [entries, isBusy, singleSelectedId]);
 
   const submitRename = useCallback(async () => {
-    if (!renamingEntryId || isBusy) return;
+    if (!renamingEntryId || isBusy || renameSubmitInFlightRef.current) return;
+    renameSubmitInFlightRef.current = true;
     const nextName = renameDraft.trim();
     if (!nextName) {
       setStatus("File name is required");
+      renameSubmitInFlightRef.current = false;
       return;
     }
     const entry = entries.find((item) => item?.id === renamingEntryId);
     if (entry && nextName === entry.name) {
       cancelRename();
+      renameSubmitInFlightRef.current = false;
       return;
     }
     suppressNextRenameRefreshRef.current = true;
@@ -503,6 +509,7 @@ export function useArchiveSession({
         return next;
       });
     } finally {
+      renameSubmitInFlightRef.current = false;
       window.setTimeout(() => {
         suppressNextRenameRefreshRef.current = false;
       }, 0);
@@ -559,15 +566,14 @@ export function useArchiveSession({
     await runTask("Moving items", () => window.stow.moveEntries(payload));
   }, [isBusy, runTask]);
 
-  const exportEntry = useCallback(async (entryId: string, variant: "original" | "optimized") => {
+  const exportEntry = useCallback(async (request: ExportRequest) => {
     if (isBusy) return;
-    const label = variant === "original" ? "Exporting original" : "Exporting optimized";
-    await runTask(label, () => window.stow.exportEntry(entryId, variant));
+    await runTask("Exporting file", () => window.stow.exportEntry(request));
   }, [isBusy, runTask]);
 
-  const exportEntries = useCallback(async (entryIds: string[], variant: "original" | "optimized") => {
+  const exportEntries = useCallback(async (request: ExportRequest) => {
     if (isBusy) return;
-    await runTask("Exporting files", () => window.stow.exportEntries(entryIds, variant));
+    await runTask("Exporting files", () => window.stow.exportEntries(request));
   }, [isBusy, runTask]);
 
   const reprocessEntry = useCallback(async (entryId: string, overrideMode: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive") => {

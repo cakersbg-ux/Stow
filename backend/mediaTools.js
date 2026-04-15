@@ -73,11 +73,11 @@ function extname(filePath) {
 }
 
 function resolveOptimizationTier(preferences = {}) {
-  if (typeof preferences.optimizationTier === "string") {
-    return preferences.optimizationTier;
-  }
   if (preferences.optimizationMode === "pick_per_file") {
     return "visually_lossless";
+  }
+  if (typeof preferences.optimizationTier === "string") {
+    return preferences.optimizationTier;
   }
   if (typeof preferences.optimizationMode === "string") {
     return preferences.optimizationMode;
@@ -593,8 +593,7 @@ async function analyzePath(filePath, preferences, capabilities, workDir, options
   const shouldOptimize = options.optimize !== false;
   const normalizedPreferences = {
     ...preferences,
-    optimizationTier: resolveOptimizationTier(preferences),
-    optimizationMode: resolveOptimizationTier(preferences)
+    optimizationTier: resolveOptimizationTier(preferences)
   };
   const extension = extname(filePath);
   if (IMAGE_EXTENSIONS.has(extension) && !supportsSharpImageInput(filePath)) {
@@ -669,5 +668,6 @@ module.exports = {
   analyzePath,
   classifyPath,
   detectAv1Encoder,
-  generatePreviewFile
+  generatePreviewFile,
+  resolveOptimizationTier
 };

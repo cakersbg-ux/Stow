@@ -69,6 +69,30 @@ export type ArtifactDescriptor = {
   actions?: string[];
 };
 
+export type ExportArtifactOption = {
+  id: string;
+  role: "source" | "preferred" | "derivative";
+  label: string;
+  description: string;
+  extension: string;
+  mime: string;
+  size: number;
+  estimatedQuality: number | null;
+  reversible: boolean;
+};
+
+export type ExportPlanEntry = {
+  entryId: string;
+  exportOptionId?: string | null;
+};
+
+export type ExportRequest = {
+  destination: string;
+  entries: ExportPlanEntry[];
+  preservePaths?: boolean;
+  removeFromArchive?: boolean;
+};
+
 export type ArchiveRevision = {
   id: string;
   addedAt: string;
@@ -135,10 +159,9 @@ export type ArchiveEntryDetail = {
   createdAt: string;
   latestRevisionId: string;
   revisions: ArchiveRevision[];
-  exportableVariants: {
-    original: boolean;
-    optimized: boolean;
-  };
+  exportable: boolean;
+  exportOptions: ExportArtifactOption[];
+  defaultExportOptionId: string | null;
   optimizationState?: "pending_optimization" | "optimized" | "failed" | null;
 };
 
@@ -247,8 +270,8 @@ declare global {
       moveEntry: (payload: { entryId: string; destinationDirectory: string }) => Promise<AppShellState>;
       deleteEntries: (entryIds: string[]) => Promise<AppShellState>;
       moveEntries: (payload: { entryIds: string[]; destinationDirectory: string }) => Promise<AppShellState>;
-      exportEntries: (entryIds: string[], variant: "original" | "optimized") => Promise<AppShellState>;
-      exportEntry: (entryId: string, variant: "original" | "optimized") => Promise<AppShellState>;
+      exportEntries: (request: ExportRequest) => Promise<AppShellState>;
+      exportEntry: (request: ExportRequest) => Promise<AppShellState>;
       openEntryExternally: (entryId: string) => Promise<AppShellState>;
       resolveEntryPreview: (entryId: string, previewKind?: "thumbnail" | "preview") => Promise<PreviewDescriptor | null>;
       onDragDrop: (listener: (payload: { paths: string[]; position: { x: number; y: number } }) => void) => () => void;

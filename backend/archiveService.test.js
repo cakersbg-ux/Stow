@@ -11,8 +11,10 @@ const { createInitialState } = require("./appState");
 const {
   entrySummaryIndexPath,
   readEntryCatalog,
+  readEntrySummaryIndex,
   readMutationJournal,
   writeEntryCatalog,
+  writeEntrySummaryIndex,
   writeMutationJournal
 } = require("./catalogStore");
 
@@ -144,13 +146,234 @@ test("archive service creates a v3 archive, ingests files, exports, and deletes 
 
     const exportDir = path.join(tempDir, "exports");
     await fs.mkdir(exportDir);
-    await service.exportEntry(detail.id, "original", exportDir);
-    const exported = await fs.readFile(path.join(exportDir, "hello-original.txt"), "utf8");
+    await service.exportEntry(detail.id, exportDir);
+    const exported = await fs.readFile(path.join(exportDir, "hello.txt"), "utf8");
     assert.equal(exported, "hello world");
 
     await service.deleteEntry(detail.id);
     const afterDelete = await service.listEntries({ offset: 0, limit: 10 });
     assert.equal(afterDelete.total, 0);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("archive service preserves archive paths when exporting and can remove exported entries", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-service-test-export-paths-"));
+  try {
+    const state = await createInitialState(path.join(tempDir, "user-data"), tempDir);
+    state.settings.deleteOriginalFilesAfterSuccessfulUpload = false;
+    state.installStatus = {
+      active: false,
+      phase: "complete",
+      message: "ready",
+      currentTarget: null,
+      completedSteps: 1,
+      totalSteps: 1,
+      installed: [],
+      skipped: []
+    };
+
+    const service = new ArchiveService(state, createEmitters());
+    await service.initialize();
+    await service.createArchive({
+      parentPath: tempDir,
+      name: "export-paths",
+      password: "password",
+      preferences: state.settings
+    });
+
+    const alphaPath = path.join(tempDir, "alpha.txt");
+    const betaPath = path.join(tempDir, "beta.txt");
+    await fs.writeFile(alphaPath, "alpha");
+    await fs.writeFile(betaPath, "beta");
+    await service.createFolder(path.join("docs", "letters"));
+    await service.createFolder(path.join("docs", "notes"));
+    await service.addPaths([alphaPath], { destinationDirectory: path.join("docs", "letters") });
+    await service.addPaths([betaPath], { destinationDirectory: path.join("docs", "notes") });
+
+    const alphaId = await service.findEntryIdByRelativePath(path.join("docs", "letters", "alpha.txt"));
+    const betaId = await service.findEntryIdByRelativePath(path.join("docs", "notes", "beta.txt"));
+    assert.ok(alphaId);
+    assert.ok(betaId);
+
+    const exportDir = path.join(tempDir, "exports");
+    await fs.mkdir(exportDir);
+    await service.exportEntries(
+      [
+        { entryId: alphaId },
+        { entryId: betaId }
+      ],
+      exportDir,
+      { preservePaths: true, removeFromArchive: true }
+    );
+
+    assert.equal(await fs.readFile(path.join(exportDir, "docs", "letters", "alpha.txt"), "utf8"), "alpha");
+    assert.equal(await fs.readFile(path.join(exportDir, "docs", "notes", "beta.txt"), "utf8"), "beta");
+
+    assert.equal(await service.findEntryIdByRelativePath(path.join("docs", "letters", "alpha.txt")), null);
+    assert.equal(await service.findEntryIdByRelativePath(path.join("docs", "notes", "beta.txt")), null);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("archive service resolves filename collisions when flattening exports", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-service-test-export-collisions-"));
+  try {
+    const state = await createInitialState(path.join(tempDir, "user-data"), tempDir);
+    state.settings.deleteOriginalFilesAfterSuccessfulUpload = false;
+    state.installStatus = {
+      active: false,
+      phase: "complete",
+      message: "ready",
+      currentTarget: null,
+      completedSteps: 1,
+      totalSteps: 1,
+      installed: [],
+      skipped: []
+    };
+
+    const service = new ArchiveService(state, createEmitters());
+    await service.initialize();
+    await service.createArchive({
+      parentPath: tempDir,
+      name: "export-collisions",
+      password: "password",
+      preferences: state.settings
+    });
+
+    const sourceDirA = path.join(tempDir, "source-a");
+    const sourceDirB = path.join(tempDir, "source-b");
+    await fs.mkdir(sourceDirA);
+    await fs.mkdir(sourceDirB);
+    const firstPath = path.join(sourceDirA, "report.txt");
+    const secondPath = path.join(sourceDirB, "report.txt");
+    await fs.writeFile(firstPath, "first");
+    await fs.writeFile(secondPath, "second");
+    await service.createFolder("folder-a");
+    await service.createFolder("folder-b");
+    await service.addPaths([firstPath], { destinationDirectory: "folder-a" });
+    await service.addPaths([secondPath], { destinationDirectory: "folder-b" });
+
+    const firstId = await service.findEntryIdByRelativePath(path.join("folder-a", "report.txt"));
+    const secondId = await service.findEntryIdByRelativePath(path.join("folder-b", "report.txt"));
+    assert.ok(firstId);
+    assert.ok(secondId);
+
+    const exportDir = path.join(tempDir, "flat-exports");
+    await fs.mkdir(exportDir);
+    await service.exportEntries(
+      [
+        { entryId: firstId },
+        { entryId: secondId }
+      ],
+      exportDir,
+      { preservePaths: false }
+    );
+
+    const exportedFiles = (await fs.readdir(exportDir)).sort();
+    assert.deepEqual(exportedFiles, ["report (2).txt", "report.txt"]);
+    assert.equal(await fs.readFile(path.join(exportDir, "report.txt"), "utf8"), "first");
+    assert.equal(await fs.readFile(path.join(exportDir, "report (2).txt"), "utf8"), "second");
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("archive service honors the requested lower stored export option", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-service-test-export-option-"));
+  try {
+    const state = await createInitialState(path.join(tempDir, "user-data"), tempDir);
+    state.settings.deleteOriginalFilesAfterSuccessfulUpload = false;
+    state.installStatus = {
+      active: false,
+      phase: "complete",
+      message: "ready",
+      currentTarget: null,
+      completedSteps: 1,
+      totalSteps: 1,
+      installed: [],
+      skipped: []
+    };
+
+    const service = new ArchiveService(state, createEmitters());
+    await service.initialize();
+    await service.createArchive({
+      parentPath: tempDir,
+      name: "export-option",
+      password: "password",
+      preferences: state.settings
+    });
+
+    const sourcePath = path.join(tempDir, "hello.txt");
+    const archivedPath = path.join(tempDir, "hello-archived.txt");
+    const smallerPath = path.join(tempDir, "hello-smaller.txt");
+    await fs.writeFile(sourcePath, "highest quality");
+    await fs.writeFile(archivedPath, "archived quality");
+    await fs.writeFile(smallerPath, "smaller");
+    await service.addPaths([sourcePath]);
+
+    const entryId = await service.findEntryIdByRelativePath("hello.txt");
+    assert.ok(entryId);
+    const entry = await service.loadEntry(entryId);
+    assert.ok(entry);
+
+    const session = service.requireArchiveSession();
+    const archivedDescriptor = await session.objectStore.storeFile(archivedPath, session.root.preferences.compressionBehavior, {
+      extension: ".txt",
+      mime: "text/plain"
+    });
+    const smallerDescriptor = await session.objectStore.storeFile(smallerPath, session.root.preferences.compressionBehavior, {
+      extension: ".txt",
+      mime: "text/plain"
+    });
+    entry.revisions[0].preferredArtifact = {
+      label: "archived",
+      extension: ".txt",
+      mime: "text/plain",
+      ...archivedDescriptor
+    };
+    entry.revisions[0].optimizedArtifact = entry.revisions[0].preferredArtifact;
+    entry.revisions[0].derivativeArtifacts = [{
+      label: "smaller",
+      extension: ".txt",
+      mime: "text/plain",
+      ...smallerDescriptor
+    }];
+    entry.revisions[0].optimizationDecision = {
+      plannerVersion: "planner-v1",
+      selectedCandidateId: "archived",
+      candidateMetrics: [
+        {
+          id: "archived",
+          label: "archived",
+          size: archivedDescriptor.size,
+          estimatedQuality: 72,
+          reversible: false,
+          accepted: true
+        },
+        {
+          id: "smaller",
+          label: "smaller",
+          size: smallerDescriptor.size,
+          estimatedQuality: 48,
+          reversible: false,
+          accepted: true
+        }
+      ],
+      sourceSummary: "text"
+    };
+    await service.saveEntry(entry);
+
+    const detail = await service.getEntryDetail(entryId);
+    assert.equal(detail.exportOptions.length, 2);
+
+    const exportDir = path.join(tempDir, "exports");
+    await fs.mkdir(exportDir);
+    await service.exportEntry(entryId, exportDir, { exportOptionId: detail.exportOptions[1].id });
+
+    assert.equal(await fs.readFile(path.join(exportDir, "hello.txt"), "utf8"), "smaller");
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
@@ -194,13 +417,13 @@ test("archive service ingests jpeg xl uploads as opaque files when the bundled d
     assert.equal(listing.items[0].previewable, true);
 
     const detail = await service.getEntryDetail(listing.items[0].id);
-    assert.equal(detail.exportableVariants.optimized, false);
+    assert.equal(detail.exportable, true);
     assert.equal(await service.resolveEntryPreview(detail.id, "preview"), null);
 
     const exportDir = path.join(tempDir, "exports");
     await fs.mkdir(exportDir);
-    await service.exportEntry(detail.id, "original", exportDir);
-    const exported = await fs.readFile(path.join(exportDir, "optimized-photo-original.jxl"));
+    await service.exportEntry(detail.id, exportDir);
+    const exported = await fs.readFile(path.join(exportDir, "optimized-photo.jxl"));
     assert.deepEqual(exported, payload);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -844,6 +1067,79 @@ test("archive service reopens from persisted entry summaries without reading ent
     const listing = await service.listEntries({ directory: "", offset: 0, limit: 10, sortColumn: "name", sortDirection: "asc" });
     assert.deepEqual(listing.items.map((entry) => entry.name), ["first.txt", "second.txt"]);
     service.loadEntry = originalLoadEntry;
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("archive service rebuilds legacy entry summaries so preview metadata remains available", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stow-service-test-summary-legacy-preview-"));
+  try {
+    const state = await createInitialState(path.join(tempDir, "user-data"), tempDir);
+    state.settings.deleteOriginalFilesAfterSuccessfulUpload = false;
+    state.installStatus = {
+      active: false,
+      phase: "complete",
+      message: "ready",
+      currentTarget: null,
+      completedSteps: 1,
+      totalSteps: 1,
+      installed: [],
+      skipped: []
+    };
+
+    const service = new ArchiveService(state, createEmitters());
+    await service.initialize();
+
+    await service.createArchive({
+      parentPath: tempDir,
+      name: "summary-legacy-preview-demo",
+      password: "password",
+      preferences: state.settings
+    });
+
+    const sourcePath = path.join(tempDir, "preview-source.png");
+    await sharp({
+      create: {
+        width: 320,
+        height: 200,
+        channels: 3,
+        background: { r: 48, g: 92, b: 160 }
+      }
+    })
+      .png()
+      .toFile(sourcePath);
+
+    await service.addPaths([sourcePath]);
+
+    const archivePath = state.archiveSession.path;
+    const archiveKey = Buffer.from(state.archiveSession.archiveKey);
+    await service.closeArchive();
+
+    const summaryIndex = await readEntrySummaryIndex(archivePath, archiveKey);
+    await writeEntrySummaryIndex(
+      archivePath,
+      archiveKey,
+      {
+        ...summaryIndex,
+        version: 1,
+        entries: Object.fromEntries(
+          Object.entries(summaryIndex.entries).map(([entryId, entry]) => {
+            const { previewable, ...legacyEntry } = entry;
+            return [entryId, legacyEntry];
+          })
+        )
+      }
+    );
+
+    await service.openArchive({ archivePath, password: "password" });
+    const listing = await service.listEntries({ directory: "", offset: 0, limit: 10, sortColumn: "name", sortDirection: "asc" });
+    assert.equal(listing.items[0].previewable, true);
+
+    const rewrittenSummaryIndex = await readEntrySummaryIndex(archivePath, archiveKey);
+    assert.equal(rewrittenSummaryIndex.version, 2);
+    const rewrittenEntry = Object.values(rewrittenSummaryIndex.entries)[0];
+    assert.equal(rewrittenEntry.previewable, true);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
@@ -2094,13 +2390,13 @@ test("archive service can re-import an exported optimized jpeg xl artifact", asy
 
     const firstListing = await service.listEntries({ offset: 0, limit: 10 });
     const sourceDetail = await service.getEntryDetail(firstListing.items[0].id);
-    assert.equal(sourceDetail.exportableVariants.optimized, true);
+    assert.equal(sourceDetail.exportable, true);
 
     const exportDir = path.join(tempDir, "exports");
     await fs.mkdir(exportDir);
-    await service.exportEntry(sourceDetail.id, "optimized", exportDir);
+    await service.exportEntry(sourceDetail.id, exportDir);
 
-    const exportedPath = path.join(exportDir, "roundtrip-source-optimized.jxl");
+    const exportedPath = path.join(exportDir, "roundtrip-source.jxl");
     await fs.access(exportedPath);
 
     await service.addPaths([exportedPath]);
@@ -2108,7 +2404,7 @@ test("archive service can re-import an exported optimized jpeg xl artifact", asy
 
     const listing = await service.listEntries({ offset: 0, limit: 10 });
     assert.equal(listing.total, 2);
-    const imported = listing.items.find((item) => item.name === "roundtrip-source-optimized.jxl");
+    const imported = listing.items.find((item) => item.name === "roundtrip-source.jxl");
     assert.ok(imported);
 
     const importedDetail = await service.getEntryDetail(imported.id);

@@ -75,10 +75,19 @@ function makeDetail(overrides: Partial<ArchiveEntryDetail> = {}): ArchiveEntryDe
     createdAt: overrides.createdAt ?? "2025-01-01T00:00:00.000Z",
     latestRevisionId: overrides.latestRevisionId ?? revision.id,
     revisions: overrides.revisions ?? [revision],
-    exportableVariants: overrides.exportableVariants ?? {
-      original: true,
-      optimized: false
-    }
+    exportable: overrides.exportable ?? true,
+    exportOptions: overrides.exportOptions ?? [{
+      id: "source:original:test:100",
+      role: "source",
+      label: "Highest quality",
+      description: "JPG · 100 bytes",
+      extension: ".jpg",
+      mime: "image/jpeg",
+      size: 100,
+      estimatedQuality: 100,
+      reversible: true
+    }],
+    defaultExportOptionId: overrides.defaultExportOptionId ?? "source:original:test:100"
   };
 }
 

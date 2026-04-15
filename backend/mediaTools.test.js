@@ -76,6 +76,13 @@ async function withTempDir(prefix, run) {
   }
 }
 
+test("optimization tier resolver preserves pick-per-file mode as visually lossless", async () => {
+  await withMediaTools({}, async ({ resolveOptimizationTier }) => {
+    assert.equal(resolveOptimizationTier({ optimizationMode: "pick_per_file", optimizationTier: "lossy_balanced" }), "visually_lossless");
+    assert.equal(resolveOptimizationTier({ optimizationMode: "lossy_aggressive" }), "lossy_aggressive");
+  });
+});
+
 test("video previews time out instead of hanging on ffmpeg", async () => {
   const spawnCalls = [];
   await withImmediateTimeouts(async () =>

@@ -66,7 +66,13 @@ export function useShellStore(): ShellStore {
       }
       setStatus("Ready");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : `${label} failed`);
+      const detail =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : "";
+      setStatus(detail ? `${label.replace(/…$/, "")} failed: ${detail}` : `${label} failed`);
     } finally {
       setIsBusy(false);
     }

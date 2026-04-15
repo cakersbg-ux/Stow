@@ -1,5 +1,6 @@
 import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type {
   AppShellState,
@@ -58,6 +59,109 @@ import {
   type SortColumn,
   type SortDirection
 } from "../archive/archiveModel";
+
+export function IconButton({
+  title,
+  className = "",
+  children,
+  ...props
+}: {
+  title: string;
+  className?: string;
+  children: ReactNode;
+} & ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type="button"
+      aria-label={title}
+      title={title}
+      className={`icon-button${className ? ` ${className}` : ""}`}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function PlusIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+      <path d="M10 4.5v11M4.5 10h11" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function ArchiveIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+      <path d="M3.25 5.25h13.5v2.6H3.25z" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinejoin="round" />
+      <path d="M4.4 7.85h11.2v7.5H4.4z" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinejoin="round" />
+      <path d="M8.1 10.35h3.8" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function CogIcon() {
+  return (
+    <svg className="icon-cogwheel" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+export function EyeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M2.06 12C3.6 7.94 7.5 5 12 5s8.4 2.94 9.94 7c-1.54 4.06-5.44 7-9.94 7s-8.4-2.94-9.94-7Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.75" />
+    </svg>
+  );
+}
+
+export function EyeOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M4 4l16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+      <path
+        d="M10.58 10.58A2 2 0 0 0 12 14a2 2 0 0 0 1.42-.58"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9.88 5.08A10.94 10.94 0 0 1 12 5c4.5 0 8.4 2.94 9.94 7a11.8 11.8 0 0 1-2.48 3.96M6.61 6.61A11.84 11.84 0 0 0 2.06 12C3.6 16.06 7.5 19 12 19a10.9 10.9 0 0 0 5.08-1.23"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 // ─── EntryThumbnail ────────────────────────────────────
 export function EntryThumbnail({
@@ -133,14 +237,41 @@ export function InstallBanner({ installStatus }: { installStatus: InstallStatus 
 }
 
 const AUTO_INSTALLABLE_TOOL_KEYS = ["zstd", "cjxl", "lzma2Offline"] as const;
+type OptimizationSelectionValue = Settings["optimizationTier"] | "pick_per_file";
+const OPTIMIZATION_SELECTION_OPTIONS: Array<{ value: OptimizationSelectionValue; label: string }> = [
+  { value: "lossless", label: "lossless" },
+  { value: "lossy_balanced", label: "lossy balanced" },
+  { value: "lossy_aggressive", label: "lossy aggressive" },
+  { value: "pick_per_file", label: "Pick per-file" },
+  { value: "visually_lossless", label: "visually lossless" }
+];
 
 function hasMissingInstallableTools(capabilities: AppShellState["capabilities"]) {
   return AUTO_INSTALLABLE_TOOL_KEYS.some((key) => !capabilities[key]?.available);
 }
 
+function getOptimizationSelectionValue(preferences: Pick<ArchivePreferences, "optimizationTier" | "optimizationMode">) {
+  return preferences.optimizationMode === "pick_per_file"
+    ? "pick_per_file"
+    : preferences.optimizationTier ?? "visually_lossless";
+}
+
+function setOptimizationSelectionValue(
+  setPreference: <K extends keyof ArchivePreferences>(key: K, value: ArchivePreferences[K]) => void,
+  value: OptimizationSelectionValue
+) {
+  if (value === "pick_per_file") {
+    setPreference("optimizationMode", "pick_per_file");
+    return;
+  }
+
+  setPreference("optimizationMode", undefined);
+  setPreference("optimizationTier", value);
+}
+
 // ─── ContextMenuComponent ──────────────────────────────
 export function ContextMenuComponent({
-  menu, items, folders, onClose, onOpen, onRename, onExportOriginal, onExportOptimized, onDelete,
+  menu, items, folders, onClose, onOpen, onRename, onExport, onDelete,
   onNewFolder, onAddFiles, onMoveToFolder, isBusy
 }: {
   menu: ContextMenuState;
@@ -149,8 +280,7 @@ export function ContextMenuComponent({
   onClose: () => void;
   onOpen: () => void;
   onRename: () => void;
-  onExportOriginal: () => void;
-  onExportOptimized: () => void;
+  onExport: () => void;
   onDelete: () => void;
   onNewFolder: () => void;
   onAddFiles: () => void;
@@ -229,11 +359,8 @@ export function ContextMenuComponent({
           {allFiles && (
             <>
               <div className="context-menu-separator" />
-              <button type="button" className="context-menu-item" disabled={isBusy} onClick={() => { onExportOriginal(); onClose(); }}>
-                Export stored
-              </button>
-              <button type="button" className="context-menu-item" disabled={isBusy} onClick={() => { onExportOptimized(); onClose(); }}>
-                Export optimized
+              <button type="button" className="context-menu-item" disabled={isBusy} onClick={() => { onExport(); onClose(); }}>
+                Export
               </button>
               <div className="context-menu-separator" />
             </>
@@ -465,6 +592,7 @@ export function FileList({
 }) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const renameSubmitRequestedRef = useRef(false);
 
   const virtualizer = useVirtualizer({
     count: total || entries.length || 0,
@@ -480,6 +608,12 @@ export function FileList({
     if (!last) return;
     if (last.index >= loadedCount - 20 && loadedCount < total) onNeedMore();
   }, [loadedCount, onNeedMore, total, virtualItems]);
+
+  useEffect(() => {
+    if (!renamingEntryId) {
+      renameSubmitRequestedRef.current = false;
+    }
+  }, [renamingEntryId]);
 
   if (!total && !entries.length) {
     const copy =
@@ -576,10 +710,27 @@ export function FileList({
                       aria-label="Rename"
                       onChange={e => onRenameChange(e.target.value)}
                       onKeyDown={e => {
-                        if (e.key === "Enter") { e.preventDefault(); onRenameSubmit(); }
-                        if (e.key === "Escape") { e.preventDefault(); onRenameCancel(); }
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          renameSubmitRequestedRef.current = true;
+                          onRenameSubmit();
+                          return;
+                        }
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          renameSubmitRequestedRef.current = false;
+                          onRenameCancel();
+                        }
                       }}
-                      onBlur={() => { void onRenameSubmit(); }}
+                      onBlur={() => {
+                        if (renameSubmitRequestedRef.current) {
+                          renameSubmitRequestedRef.current = false;
+                          return;
+                        }
+                        void onRenameSubmit();
+                      }}
                       onClick={e => e.stopPropagation()}
                     />
                   ) : (
@@ -617,8 +768,8 @@ export function FileList({
 export function DetailPanel({
   selectedIds, entries, selectedEntry, preview, detailRevision,
   overrideMode, canReprocessLossless, isBusy, onClose,
-  onOpen, onExportOriginal, onExportOptimized, onReprocess, onDelete,
-  onOverrideModeChange, onBulkDelete, onBulkExport
+  onOpen, onExport, onReprocess, onDelete,
+  onOverrideModeChange, onBulkDelete, canExportSelected
 }: {
   selectedIds: ReadonlySet<string>;
   entries: Array<ArchiveEntryListItem | undefined>;
@@ -630,13 +781,12 @@ export function DetailPanel({
   isBusy: boolean;
   onClose: () => void;
   onOpen: () => void;
-  onExportOriginal: () => void;
-  onExportOptimized: () => void;
+  onExport: () => void;
   onReprocess: () => void;
   onDelete: () => void;
   onOverrideModeChange: (v: "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive") => void;
   onBulkDelete: () => void;
-  onBulkExport: (variant: "original" | "optimized") => void;
+  canExportSelected: boolean;
 }) {
   const count = selectedIds.size;
   const multiSelect = count > 1;
@@ -667,8 +817,7 @@ export function DetailPanel({
             {totalSize !== null && <span className="muted">{formatBytes(totalSize)} stored total</span>}
           </div>
           <div className="detail-actions">
-            <button type="button" className="detail-action detail-action-neutral" disabled={isBusy || !(selectedEntry?.exportableVariants.original ?? false)} onClick={() => onBulkExport("original")}>Export original</button>
-            <button type="button" className="detail-action detail-action-neutral" disabled={isBusy} onClick={() => onBulkExport("optimized")}>Export optimized</button>
+            <button type="button" className="detail-action detail-action-neutral" disabled={isBusy || !canExportSelected} onClick={onExport}>Export</button>
           </div>
           <div className="detail-actions">
             <button type="button" className="detail-action detail-action-danger" disabled={isBusy} onClick={onBulkDelete}>Delete {count} items</button>
@@ -741,8 +890,7 @@ export function DetailPanel({
           </div>
           <div className="detail-actions detail-actions-primary">
             <button type="button" className="detail-action detail-action-accent" disabled={isBusy} onClick={onOpen}>Open</button>
-            <button type="button" className="detail-action detail-action-neutral" disabled={isBusy || !selectedEntry.exportableVariants.original} onClick={onExportOriginal}>Export original</button>
-            <button type="button" className="detail-action detail-action-neutral" disabled={isBusy || !selectedEntry.exportableVariants.optimized} onClick={onExportOptimized}>Export optimized</button>
+            <button type="button" className="detail-action detail-action-neutral" disabled={isBusy || !canExportSelected} onClick={onExport}>Export</button>
           </div>
           <div className="detail-actions">
             <select disabled={isBusy} value={overrideMode} onChange={e => onOverrideModeChange(e.target.value as "lossless" | "visually_lossless" | "lossy_balanced" | "lossy_aggressive")} style={{ flex: 1 }}>
@@ -764,6 +912,313 @@ export function DetailPanel({
         </div>
       )}
     </div>
+  );
+}
+
+export function ExportDialog({
+  open,
+  isBusy,
+  loading,
+  error,
+  entries,
+  destination,
+  preservePaths,
+  removeFromArchive,
+  perFileMode,
+  globalQualityMode,
+  batchQualityMode,
+  canExport,
+  resolveThumbnail,
+  onClose,
+  onDestinationChange,
+  onBrowseDestination,
+  onPreservePathsChange,
+  onRemoveFromArchiveChange,
+  onPerFileModeChange,
+  onGlobalQualityModeChange,
+  onSingleGlobalOptionChange,
+  onBatchQualityModeChange,
+  onToggleBatchSelected,
+  onToggleAllBatchSelected,
+  onApplyBatchQuality,
+  onToggleEntryIncluded,
+  onEntryOptionChange,
+  onSubmit
+}: {
+  open: boolean;
+  isBusy: boolean;
+  loading: boolean;
+  error: string | null;
+  entries: Array<{
+    detail: ArchiveEntryDetail;
+    include: boolean;
+    exportOptionId: string | null;
+    batchSelected: boolean;
+  }>;
+  destination: string;
+  preservePaths: boolean;
+  removeFromArchive: boolean;
+  perFileMode: boolean;
+  globalQualityMode: "highest_available" | "smaller_if_available";
+  batchQualityMode: "highest_available" | "smaller_if_available";
+  canExport: boolean;
+  resolveThumbnail: (entryId: string) => Promise<PreviewDescriptor | null>;
+  onClose: () => void;
+  onDestinationChange: (value: string) => void;
+  onBrowseDestination: () => void;
+  onPreservePathsChange: (value: boolean) => void;
+  onRemoveFromArchiveChange: (value: boolean) => void;
+  onPerFileModeChange: (value: boolean) => void;
+  onGlobalQualityModeChange: (value: "highest_available" | "smaller_if_available") => void;
+  onSingleGlobalOptionChange: (value: string) => void;
+  onBatchQualityModeChange: (value: "highest_available" | "smaller_if_available") => void;
+  onToggleBatchSelected: (entryId: string) => void;
+  onToggleAllBatchSelected: (value: boolean) => void;
+  onApplyBatchQuality: () => void;
+  onToggleEntryIncluded: (entryId: string, value: boolean) => void;
+  onEntryOptionChange: (entryId: string, optionId: string) => void;
+  onSubmit: () => void;
+}) {
+  if (!open) return null;
+
+  const includedCount = entries.filter((entry) => entry.include).length;
+  const batchSelectedCount = entries.filter((entry) => entry.batchSelected).length;
+  const allBatchSelected = entries.length > 0 && batchSelectedCount === entries.length;
+  const singleEntry = entries.length === 1 ? entries[0] : null;
+
+  function toThumbnailEntry(detail: ArchiveEntryDetail): ArchiveEntryListItem {
+    const previewable = detail.fileKind === "image" || detail.fileKind === "video" || detail.mime === "image/jxl";
+    return {
+      id: detail.id,
+      entryType: "file",
+      name: detail.name,
+      relativePath: detail.relativePath,
+      fileKind: detail.fileKind,
+      mime: detail.mime,
+      size: detail.size,
+      sourceSize: detail.sourceSize,
+      latestRevisionId: detail.latestRevisionId,
+      overrideMode: detail.revisions[0]?.overrideMode ?? null,
+      optimizationState: detail.optimizationState ?? null,
+      previewable,
+      childCount: null
+    };
+  }
+
+  return createPortal(
+    <div className="dialog-overlay" role="presentation" onClick={onClose}>
+      <div className="dialog dialog-wide export-dialog" role="dialog" aria-modal="true" aria-labelledby="export-dialog-title" onClick={(event) => event.stopPropagation()}>
+        <div className="dialog-header">
+          <div>
+            <h2 id="export-dialog-title">Export</h2>
+            <p className="muted export-dialog-subtitle">
+              {entries.length === 1 ? entries[0].detail.name : `${entries.length} selected files`} · {includedCount} included
+            </p>
+          </div>
+          <div className="actions">
+            <button type="button" onClick={onClose}>Close</button>
+          </div>
+        </div>
+        <div className="dialog-body export-dialog-body">
+          <div className="export-dialog-grid">
+            <section className="export-settings-panel">
+              <div className="setting-field">
+                <label className="setting-label" htmlFor="export-destination">Destination</label>
+                <div className="inline">
+                  <input
+                    id="export-destination"
+                    disabled={isBusy || loading}
+                    value={destination}
+                    onChange={(event) => onDestinationChange(event.target.value)}
+                    placeholder="Choose export folder"
+                  />
+                  <button type="button" disabled={isBusy || loading} onClick={onBrowseDestination}>Browse</button>
+                </div>
+              </div>
+
+              <div className="export-settings-card">
+                <div className="settings-section-title">Export-wide settings</div>
+                <div className="settings-grid">
+                  <div className="toggle-field">
+                    <span className="setting-label">Preserve archive folders</span>
+                    <input
+                      type="checkbox"
+                      className="toggle-switch"
+                      checked={preservePaths}
+                      disabled={isBusy || loading || entries.length <= 1}
+                      onChange={(event) => onPreservePathsChange(event.target.checked)}
+                    />
+                  </div>
+                  <div className="toggle-field">
+                    <span className="setting-label">Remove exported files from archive</span>
+                    <input
+                      type="checkbox"
+                      className="toggle-switch"
+                      checked={removeFromArchive}
+                      disabled={isBusy || loading}
+                      onChange={(event) => onRemoveFromArchiveChange(event.target.checked)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className={`export-settings-card${perFileMode ? " export-settings-card-disabled" : ""}`}>
+                <div className="settings-section-title">Global export settings</div>
+                <div className="settings-grid">
+                  {singleEntry ? (
+                    <div className="setting-field">
+                      <label className="setting-label" htmlFor="export-single-quality">Export quality</label>
+                      <select
+                        id="export-single-quality"
+                        disabled={isBusy || loading || perFileMode}
+                        value={singleEntry.exportOptionId ?? singleEntry.detail.defaultExportOptionId ?? ""}
+                        onChange={(event) => onSingleGlobalOptionChange(event.target.value)}
+                      >
+                        {singleEntry.detail.exportOptions.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}{option.description ? ` · ${option.description}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div className="setting-field">
+                      <label className="setting-label" htmlFor="export-global-quality">Export quality</label>
+                      <select
+                        id="export-global-quality"
+                        disabled={isBusy || loading || perFileMode}
+                        value={globalQualityMode}
+                        onChange={(event) => onGlobalQualityModeChange(event.target.value as "highest_available" | "smaller_if_available")}
+                      >
+                        <option value="highest_available">Archived quality</option>
+                        <option value="smaller_if_available">Smaller stored variant when available</option>
+                      </select>
+                      <span className="setting-hint">Files without a smaller stored variant keep the archived export quality.</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="export-settings-card">
+                <div className="toggle-field">
+                  <span className="setting-label">Pick settings per file</span>
+                  <input
+                    type="checkbox"
+                    className="toggle-switch"
+                    checked={perFileMode}
+                    disabled={isBusy || loading}
+                    onChange={(event) => onPerFileModeChange(event.target.checked)}
+                  />
+                </div>
+                <span className="setting-hint">When enabled, each file can use its own export quality and inclusion state.</span>
+              </div>
+
+              {error ? <div className="warning">{error}</div> : null}
+            </section>
+
+            <section className="export-files-panel">
+              <div className="export-files-toolbar">
+                <div>
+                  <div className="settings-section-title">Files in this export</div>
+                  <span className="muted">{entries.length} total</span>
+                </div>
+                {perFileMode && entries.length > 1 ? (
+                  <div className="export-batch-toolbar">
+                    <button type="button" disabled={isBusy || loading} onClick={() => onToggleAllBatchSelected(!allBatchSelected)}>
+                      {allBatchSelected ? "Clear batch" : "Select all for batch"}
+                    </button>
+                    <select
+                      disabled={isBusy || loading || batchSelectedCount === 0}
+                      value={batchQualityMode}
+                      onChange={(event) => onBatchQualityModeChange(event.target.value as "highest_available" | "smaller_if_available")}
+                    >
+                      <option value="highest_available">Archived quality</option>
+                      <option value="smaller_if_available">Smaller variant</option>
+                    </select>
+                    <button type="button" disabled={isBusy || loading || batchSelectedCount === 0} onClick={onApplyBatchQuality}>
+                      Apply to {batchSelectedCount || "selected"}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="export-entry-list">
+                {loading ? <div className="detail-panel-empty">Loading export options…</div> : null}
+                {!loading && entries.length === 0 ? <div className="detail-panel-empty">No files selected</div> : null}
+                {!loading && entries.map((entry) => (
+                  <div key={entry.detail.id} className={`export-entry-row${!entry.include ? " export-entry-row-disabled" : ""}`}>
+                    {perFileMode && entries.length > 1 ? (
+                      <label className="export-entry-batch">
+                        <input
+                          type="checkbox"
+                          checked={entry.batchSelected}
+                          disabled={isBusy || loading}
+                          onChange={() => onToggleBatchSelected(entry.detail.id)}
+                        />
+                        <span className="muted">Batch</span>
+                      </label>
+                    ) : (
+                      <div className="export-entry-batch export-entry-batch-placeholder" />
+                    )}
+                    <label className="export-entry-include">
+                      <input
+                        type="checkbox"
+                        checked={entry.include}
+                        disabled={isBusy || loading}
+                        onChange={(event) => onToggleEntryIncluded(entry.detail.id, event.target.checked)}
+                      />
+                    </label>
+                    <div className="export-entry-main">
+                      <div className="export-entry-title-row">
+                        <EntryThumbnail entry={toThumbnailEntry(entry.detail)} resolveThumbnail={resolveThumbnail} />
+                        <div className="export-entry-title-copy">
+                          <div className="export-entry-name">{entry.detail.name}</div>
+                          <div className="export-entry-path muted" title={entry.detail.relativePath}>{entry.detail.relativePath}</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="export-entry-quality">
+                      {perFileMode ? (
+                        <select
+                          disabled={isBusy || loading || !entry.include}
+                          value={entry.exportOptionId ?? entry.detail.defaultExportOptionId ?? ""}
+                          onChange={(event) => onEntryOptionChange(entry.detail.id, event.target.value)}
+                        >
+                          {entry.detail.exportOptions.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}{option.description ? ` · ${option.description}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="export-entry-quality-summary muted">
+                          {entry.detail.exportOptions.find((option) => option.id === entry.exportOptionId)?.label ?? "Uses global setting"}
+                        </div>
+                      )}
+                    </div>
+                    <div className="export-entry-size muted">
+                      {formatBytes(entry.detail.size)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </div>
+        <div className="dialog-footer">
+          <span className="muted">
+            {removeFromArchive ? "Exported files will be removed from the archive after a successful export." : "Exported files remain in the archive."}
+          </span>
+          <div className="actions">
+            <button type="button" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn-primary" disabled={!canExport || isBusy || loading} onClick={onSubmit}>
+              Export
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -850,11 +1305,14 @@ export function SettingsDialog({
             <div className="settings-grid">
               <div className="setting-field">
                 <label className="setting-label">Optimization tier</label>
-                <select disabled={isBusy} value={draftPrefs.optimizationTier} onChange={e => setP("optimizationTier", e.target.value as ArchivePreferences["optimizationTier"])}>
-                  <option value="lossless">lossless</option>
-                  <option value="visually_lossless">visually lossless</option>
-                  <option value="lossy_balanced">lossy balanced</option>
-                  <option value="lossy_aggressive">lossy aggressive</option>
+                <select
+                  disabled={isBusy}
+                  value={getOptimizationSelectionValue(draftPrefs)}
+                  onChange={e => setOptimizationSelectionValue(setP, e.target.value as OptimizationSelectionValue)}
+                >
+                  {OPTIMIZATION_SELECTION_OPTIONS.map(({ value, label }) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
                 </select>
               </div>
               <div className="setting-hint">Compression and metadata policy are now handled automatically by the backend planner.</div>
@@ -919,24 +1377,20 @@ export function SettingsDialog({
 
 // ─── ArchiveManagerDialog ──────────────────────────────
 export function ArchiveManagerDialog({
-  open, tab, isBusy,
-  openPath, openPassword, selectedArchiveIsUnlocked, canOpen,
-  archiveName, archiveDirectory, archivePassword, confirmArchivePassword,
-  draftPrefs, passwordsMatch, canCreate,
-  onClose, onTabChange,
-  onOpenPathChange, onBrowseOpen, onOpenPasswordChange, onOpen,
+  open, isBusy,
+  archiveName, archiveDirectory, archivePassword, showArchivePassword,
+  draftPrefs, canCreate,
+  onClose,
   onArchiveNameChange, onArchiveDirectoryChange, onBrowseCreate,
-  onArchivePasswordChange, onConfirmArchivePasswordChange,
+  onArchivePasswordChange, onArchivePasswordVisibilityChange,
   onDraftPrefsChange, onCreate
 }: {
-  open: boolean; tab: "open" | "create"; isBusy: boolean;
-  openPath: string; openPassword: string; selectedArchiveIsUnlocked: boolean; canOpen: boolean;
-  archiveName: string; archiveDirectory: string; archivePassword: string; confirmArchivePassword: string;
-  draftPrefs: ArchivePreferences; passwordsMatch: boolean; canCreate: boolean;
-  onClose: () => void; onTabChange: (t: "open" | "create") => void;
-  onOpenPathChange: (v: string) => void; onBrowseOpen: () => void; onOpenPasswordChange: (v: string) => void; onOpen: () => void;
+  open: boolean; isBusy: boolean;
+  archiveName: string; archiveDirectory: string; archivePassword: string; showArchivePassword: boolean;
+  draftPrefs: ArchivePreferences; canCreate: boolean;
+  onClose: () => void;
   onArchiveNameChange: (v: string) => void; onArchiveDirectoryChange: (v: string) => void; onBrowseCreate: () => void;
-  onArchivePasswordChange: (v: string) => void; onConfirmArchivePasswordChange: (v: string) => void;
+  onArchivePasswordChange: (v: string) => void; onArchivePasswordVisibilityChange: (v: boolean) => void;
   onDraftPrefsChange: (p: ArchivePreferences) => void; onCreate: () => void;
 }) {
   if (!open) return null;
@@ -945,83 +1399,132 @@ export function ArchiveManagerDialog({
   return createPortal(
     <div className="dialog-overlay" role="presentation" onClick={onClose}>
       <div className="dialog" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
-        <div className="archive-manager-tabs">
-          <button type="button" className={`archive-manager-tab${tab === "open" ? " archive-manager-tab-active" : ""}`} onClick={() => onTabChange("open")}>Open archive</button>
-          <button type="button" className={`archive-manager-tab${tab === "create" ? " archive-manager-tab-active" : ""}`} onClick={() => onTabChange("create")}>New archive</button>
+        <div className="dialog-header">
+          <div>
+            <h2>New archive</h2>
+            <p className="muted" style={{ margin: "2px 0 0", fontSize: 11 }}>Create a local encrypted archive.</p>
+          </div>
+          <div className="actions">
+            <button type="button" onClick={onClose}>Close</button>
+          </div>
         </div>
-
-        {tab === "open" && (
-          <div className="dialog-body">
-            <form className="archive-form" onSubmit={e => { e.preventDefault(); onOpen(); }}>
-              <div className="setting-field">
-                <label className="setting-label">Archive path</label>
-                <div className="inline">
-                  <input disabled={isBusy} value={openPath} onChange={e => onOpenPathChange(e.target.value)} placeholder="/path/to/archive.stow" />
-                  <button type="button" disabled={isBusy} onClick={onBrowseOpen}>Browse</button>
-                </div>
+        <div className="dialog-body">
+          <form className="archive-form" onSubmit={e => { e.preventDefault(); onCreate(); }}>
+            <div className="setting-field">
+              <label className="setting-label">Archive name</label>
+              <input disabled={isBusy} value={archiveName} onChange={e => onArchiveNameChange(e.target.value)} />
+            </div>
+            <div className="setting-field">
+              <label className="setting-label">Location</label>
+              <div className="inline">
+                <input disabled={isBusy} value={archiveDirectory} onChange={e => onArchiveDirectoryChange(e.target.value)} placeholder="Parent directory" />
+                <button type="button" disabled={isBusy} onClick={onBrowseCreate}>Browse</button>
               </div>
-              {!selectedArchiveIsUnlocked && (
+            </div>
+            <div className="setting-field">
+              <label className="setting-label">Password</label>
+              <div className="password-field">
+                <input
+                  disabled={isBusy}
+                  type={showArchivePassword ? "text" : "password"}
+                  value={archivePassword}
+                  onChange={e => onArchivePasswordChange(e.target.value)}
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  className="icon-button icon-button-plain password-visibility-toggle"
+                  title={showArchivePassword ? "Hide password" : "Show password while typing"}
+                  aria-label={showArchivePassword ? "Hide password" : "Show password while typing"}
+                  disabled={isBusy}
+                  onClick={() => onArchivePasswordVisibilityChange(!showArchivePassword)}
+                >
+                  {showArchivePassword ? <EyeIcon /> : <EyeOffIcon />}
+                </button>
+              </div>
+            </div>
+            <div className="settings-section">
+              <div className="settings-section-title">Optimization</div>
+              <div className="settings-grid">
                 <div className="setting-field">
-                  <label className="setting-label">Password</label>
-                  <input disabled={isBusy} type="password" value={openPassword} onChange={e => onOpenPasswordChange(e.target.value)} autoComplete="current-password" />
+                  <label className="setting-label">Optimization tier</label>
+                  <select
+                    disabled={isBusy}
+                    value={getOptimizationSelectionValue(draftPrefs)}
+                    onChange={e => setOptimizationSelectionValue(setP, e.target.value as OptimizationSelectionValue)}
+                  >
+                    {OPTIMIZATION_SELECTION_OPTIONS.map(({ value, label }) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
                 </div>
-              )}
-              {selectedArchiveIsUnlocked && <span className="muted">This archive is already open.</span>}
-              <div className="actions">
-                <button type="submit" className="btn-primary" disabled={!canOpen || selectedArchiveIsUnlocked}>Open</button>
-                <button type="button" onClick={onClose}>Cancel</button>
+                <div className="setting-hint">The backend now auto-selects codec and compression policy per file.</div>
               </div>
-            </form>
-          </div>
-        )}
+            </div>
+            <div className="actions">
+              <button type="submit" className="btn-primary" disabled={!canCreate}>Create</button>
+              <button type="button" onClick={onClose}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
 
-        {tab === "create" && (
-          <div className="dialog-body">
-            <form className="archive-form" onSubmit={e => { e.preventDefault(); onCreate(); }}>
-              <div className="setting-field">
-                <label className="setting-label">Archive name</label>
-                <input disabled={isBusy} value={archiveName} onChange={e => onArchiveNameChange(e.target.value)} />
-              </div>
-              <div className="setting-field">
-                <label className="setting-label">Location</label>
-                <div className="inline">
-                  <input disabled={isBusy} value={archiveDirectory} onChange={e => onArchiveDirectoryChange(e.target.value)} placeholder="Parent directory" />
-                  <button type="button" disabled={isBusy} onClick={onBrowseCreate}>Browse</button>
-                </div>
-              </div>
-              <div className="setting-field">
-                <label className="setting-label">Password</label>
-                <input disabled={isBusy} type="password" value={archivePassword} onChange={e => onArchivePasswordChange(e.target.value)} autoComplete="new-password" />
-              </div>
-              <div className="setting-field">
-                <label className="setting-label">Confirm password</label>
-                <input disabled={isBusy} type="password" value={confirmArchivePassword} onChange={e => onConfirmArchivePasswordChange(e.target.value)} autoComplete="new-password" />
-              </div>
-              {!passwordsMatch && archivePassword.length > 0 && confirmArchivePassword.length > 0 && (
-                <div className="warning">Passwords do not match.</div>
-              )}
-              <div className="settings-section">
-                <div className="settings-section-title">Optimization</div>
-                <div className="settings-grid">
-                  <div className="setting-field">
-                    <label className="setting-label">Optimization tier</label>
-                    <select disabled={isBusy} value={draftPrefs.optimizationTier} onChange={e => setP("optimizationTier", e.target.value as ArchivePreferences["optimizationTier"])}>
-                      <option value="lossless">lossless</option>
-                      <option value="visually_lossless">visually lossless</option>
-                      <option value="lossy_balanced">lossy balanced</option>
-                      <option value="lossy_aggressive">lossy aggressive</option>
-                    </select>
-                  </div>
-                  <div className="setting-hint">The backend now auto-selects codec and compression policy per file.</div>
-                </div>
-              </div>
-              <div className="actions">
-                <button type="submit" className="btn-primary" disabled={!canCreate}>Create</button>
-                <button type="button" onClick={onClose}>Cancel</button>
-              </div>
-            </form>
+export function ArchiveUnlockDialog({
+  open,
+  archivePath,
+  isBusy,
+  password,
+  canUnlock,
+  onPasswordChange,
+  onClose,
+  onUnlock
+}: {
+  open: boolean;
+  archivePath: string;
+  isBusy: boolean;
+  password: string;
+  canUnlock: boolean;
+  onPasswordChange: (value: string) => void;
+  onClose: () => void;
+  onUnlock: () => void;
+}) {
+  if (!open) return null;
+
+  return createPortal(
+    <div className="dialog-overlay" role="presentation" onClick={onClose}>
+      <div className="dialog dialog-compact" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+        <div className="dialog-header">
+          <div>
+            <h2>Unlock archive</h2>
+            <p className="muted" style={{ margin: "2px 0 0", fontSize: 11, wordBreak: "break-all" }}>{archivePath}</p>
           </div>
-        )}
+          <div className="actions">
+            <button type="button" onClick={onClose}>Close</button>
+          </div>
+        </div>
+        <div className="dialog-body">
+          <form className="archive-form" onSubmit={e => { e.preventDefault(); if (canUnlock) onUnlock(); }}>
+            <div className="setting-field">
+              <label className="setting-label">Password</label>
+              <input
+                autoFocus
+                disabled={isBusy}
+                type="password"
+                value={password}
+                onChange={e => onPasswordChange(e.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+            <div className="actions">
+              <button type="submit" className="btn-primary" disabled={!canUnlock}>Unlock</button>
+              <button type="button" onClick={onClose}>Cancel</button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>,
     document.body
@@ -1114,10 +1617,8 @@ export function ArchiveBrowserDialog({
                     <div className="detail-meta-row"><span className="detail-meta-label">Modified</span><span className="detail-meta-value">{formatDateTime(selected.lastModifiedAt)}</span></div>
                     <div className="detail-meta-row"><span className="detail-meta-label">Size</span><span className="detail-meta-value">{formatArchiveSize(selected.sizeBytes)}</span></div>
                   </div>
-                  <div className="actions">
-                    <button type="button" className="btn-primary" disabled={isBusy || currentArchivePath === selected.path} onClick={() => onSwapSelected()}>
-                      {currentArchivePath === selected.path ? "Currently open" : "Open this archive"}
-                    </button>
+                  <div className="muted" style={{ fontSize: 11 }}>
+                    Double-click a row to open this archive.
                   </div>
                   <div className="actions">
                     <button type="button" className="btn-danger" disabled={isBusy} onClick={() => onDeleteSelected(selected)}>Delete archive</button>
@@ -1256,13 +1757,13 @@ export function Hub({
   sortMode,
   isBusy,
   onOpenManager,
+  onOpenArchiveBrowser,
   onOpenArchivePath,
   onRefreshArchives,
   onSortModeChange,
   onDeleteArchive,
   onReturnToArchive,
-  onLockArchive,
-  onCloseArchive
+  onLockArchive
 }: {
   currentArchive: AppShellState["archive"];
   archiveUnlocked: boolean;
@@ -1271,14 +1772,14 @@ export function Hub({
   error: string | null;
   sortMode: ArchiveSortMode;
   isBusy: boolean;
-  onOpenManager: (tab: "open" | "create") => void;
+  onOpenManager: () => void;
+  onOpenArchiveBrowser: () => void;
   onOpenArchivePath: (path: string) => void;
   onRefreshArchives: () => void;
   onSortModeChange: (mode: ArchiveSortMode) => void;
   onDeleteArchive: (archive: ArchiveBrowserItem) => void;
   onReturnToArchive: () => void;
   onLockArchive: () => void;
-  onCloseArchive: () => void;
 }) {
   const currentPath = currentArchive?.path ?? null;
   const currentSummary = currentArchive?.summary ?? null;
@@ -1296,11 +1797,19 @@ export function Hub({
             )}
           </div>
           <div className="actions">
-            <button type="button" className="btn-primary" disabled={isBusy} onClick={archiveUnlocked ? onReturnToArchive : () => onOpenArchivePath(currentPath ?? "")}>
-              {archiveUnlocked ? "Return" : "Unlock"}
+            {archiveUnlocked && (
+              <button type="button" className="btn-primary" disabled={isBusy} onClick={onReturnToArchive}>
+                Return to archive
+              </button>
+            )}
+            <button
+              type="button"
+              className={archiveUnlocked ? undefined : "btn-primary"}
+              disabled={isBusy}
+              onClick={archiveUnlocked ? onLockArchive : () => onOpenArchivePath(currentPath ?? "")}
+            >
+              {archiveUnlocked ? "Lock" : "Unlock"}
             </button>
-            {archiveUnlocked && <button type="button" disabled={isBusy} onClick={onLockArchive}>Lock</button>}
-            <button type="button" disabled={isBusy} onClick={onCloseArchive}>Close</button>
           </div>
         </div>
       )}
@@ -1318,8 +1827,12 @@ export function Hub({
           <button type="button" disabled={loading} onClick={onRefreshArchives}>Refresh</button>
         </div>
         <div className="hub-toolbar-right">
-          <button type="button" className="btn-primary" disabled={isBusy} onClick={() => onOpenManager("open")}>Open archive</button>
-          <button type="button" disabled={isBusy} onClick={() => onOpenManager("create")}>New archive</button>
+          <IconButton title="New archive" className="icon-button-accent" disabled={isBusy} onClick={onOpenManager}>
+            <PlusIcon />
+          </IconButton>
+          <IconButton title="All archives" disabled={isBusy} onClick={onOpenArchiveBrowser}>
+            <ArchiveIcon />
+          </IconButton>
         </div>
       </div>
 

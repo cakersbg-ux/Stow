@@ -409,7 +409,10 @@ function normalizeSettings(nextSettings, defaultArchiveRoot) {
   const archivePreferences = normalizeArchivePreferences(source);
   return {
     ...archivePreferences,
-    optimizationMode: archivePreferences.optimizationTier,
+    optimizationMode:
+      typeof source.optimizationMode === "string"
+        ? source.optimizationMode
+        : archivePreferences.optimizationMode ?? archivePreferences.optimizationTier,
     deleteOriginalFilesAfterSuccessfulUpload: normalizeBoolean(
       source.deleteOriginalFilesAfterSuccessfulUpload,
       DEFAULT_SETTINGS.deleteOriginalFilesAfterSuccessfulUpload

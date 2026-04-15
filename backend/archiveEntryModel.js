@@ -60,6 +60,137 @@ function getRevisionPreferredArtifact(revision) {
   return revision?.preferredArtifact ?? revision?.optimizedArtifact ?? revision?.originalArtifact ?? null;
 }
 
+function artifactExportOptionId(role, artifact) {
+  return `${role}:${artifact?.label || "artifact"}:${artifact?.contentHash || ""}:${artifact?.size || 0}`;
+}
+
+function findArtifactCandidateMetric(revision, artifact) {
+  const metrics = Array.isArray(revision?.optimizationDecision?.candidateMetrics)
+    ? revision.optimizationDecision.candidateMetrics
+    : [];
+  return metrics.find((candidate) => candidate.label === artifact?.label) || null;
+}
+
+function buildExportOptionLabel(role, artifact, metric, isDefault) {
+  if (isDefault) {
+    return "Archived quality";
+  }
+  if (metric?.reversible) {
+    return "Lower lossless variant";
+  }
+  return artifact?.label ? `Lower ${artifact.label} variant` : "Lower archived quality";
+}
+
+function buildExportOptionDescription(artifact, metric) {
+  const parts = [];
+  if (artifact?.extension) {
+    parts.push(artifact.extension.replace(/^\./, "").toUpperCase());
+  }
+  if (typeof artifact?.size === "number" && Number.isFinite(artifact.size)) {
+    parts.push(`${artifact.size} bytes`);
+  }
+  if (metric?.reversible) {
+    parts.push("lossless");
+  } else if (typeof metric?.estimatedQuality === "number" && Number.isFinite(metric.estimatedQuality)) {
+    parts.push(`quality ${Math.round(metric.estimatedQuality)}`);
+  }
+  return parts.join(" · ");
+}
+
+function buildRevisionExportOptions(revision) {
+  if (!revision) {
+    return [];
+  }
+
+  const options = [];
+  const preferredArtifact = getRevisionPreferredArtifact(revision);
+  if (!preferredArtifact) {
+    return [];
+  }
+
+  const additionalArtifacts = Array.isArray(revision.derivativeArtifacts) ? revision.derivativeArtifacts : [];
+  const preferredMetric = findArtifactCandidateMetric(revision, preferredArtifact);
+  const preferredQuality =
+    typeof preferredMetric?.estimatedQuality === "number" && Number.isFinite(preferredMetric.estimatedQuality)
+      ? preferredMetric.estimatedQuality
+      : null;
+  const preferredSize =
+    typeof preferredArtifact.size === "number" && Number.isFinite(preferredArtifact.size)
+      ? preferredArtifact.size
+      : null;
+
+  const pushOption = (role, artifact, isDefault = false) => {
+    if (!artifact || options.some((candidate) => artifactsEquivalent(candidate.artifact, artifact))) {
+      return;
+    }
+    const metric = findArtifactCandidateMetric(revision, artifact);
+    options.push({
+      id: artifactExportOptionId(role, artifact),
+      role,
+      label: buildExportOptionLabel(role, artifact, metric, isDefault),
+      description: buildExportOptionDescription(artifact, metric),
+      extension: artifact.extension || "",
+      mime: artifact.mime || "",
+      size: artifact.size,
+      estimatedQuality: typeof metric?.estimatedQuality === "number" ? Math.round(metric.estimatedQuality) : null,
+      reversible: Boolean(metric?.reversible),
+      artifact
+    });
+  };
+
+  pushOption("preferred", preferredArtifact, true);
+
+  const lowerArtifacts = additionalArtifacts
+    .filter((artifact) => !artifactsEquivalent(artifact, preferredArtifact))
+    .map((artifact) => ({
+      artifact,
+      metric: findArtifactCandidateMetric(revision, artifact)
+    }))
+    .filter(({ artifact, metric }) => {
+      const artifactQuality =
+        typeof metric?.estimatedQuality === "number" && Number.isFinite(metric.estimatedQuality)
+          ? metric.estimatedQuality
+          : null;
+      const artifactSize =
+        typeof artifact.size === "number" && Number.isFinite(artifact.size)
+          ? artifact.size
+          : null;
+
+      if (preferredQuality !== null && artifactQuality !== null) {
+        return artifactQuality <= preferredQuality;
+      }
+      if (preferredSize !== null && artifactSize !== null) {
+        return artifactSize <= preferredSize;
+      }
+      return true;
+    })
+    .sort((left, right) => {
+      const leftQuality = typeof left.metric?.estimatedQuality === "number" ? left.metric.estimatedQuality : -1;
+      const rightQuality = typeof right.metric?.estimatedQuality === "number" ? right.metric.estimatedQuality : -1;
+      if (leftQuality !== rightQuality) {
+        return rightQuality - leftQuality;
+      }
+      return (left.artifact.size || 0) - (right.artifact.size || 0);
+    });
+
+  for (const { artifact } of lowerArtifacts) {
+    if (!artifactsEquivalent(artifact, preferredArtifact)) {
+      pushOption("derivative", artifact);
+    }
+  }
+
+  return options;
+}
+
+function buildEntryExportOptions(entry) {
+  const latestRevision = getLatestRevision(entry);
+  const options = buildRevisionExportOptions(latestRevision);
+  return {
+    options: options.map(({ artifact, ...option }) => option),
+    defaultOptionId: options[0]?.id ?? null
+  };
+}
+
 function getEntryDisplaySize(entry) {
   const latestRevision = getLatestRevision(entry);
   return getRevisionPreferredArtifact(latestRevision)?.size ?? getRevisionSourceArtifact(latestRevision)?.size ?? entry.size;
@@ -119,19 +250,21 @@ function buildEntryDetail(entry) {
   const latestRevision = getLatestRevision(entry);
   const sourceArtifact = getRevisionSourceArtifact(latestRevision);
   const preferredArtifact = getRevisionPreferredArtifact(latestRevision);
+  const exportOptions = buildEntryExportOptions(entry);
   return {
     ...entry,
     size: getEntryDisplaySize(entry),
     sourceSize: entry.size,
-    exportableVariants: {
-      original: Boolean(sourceArtifact),
-      optimized: Boolean(preferredArtifact) && (!sourceArtifact || preferredArtifact.contentHash !== sourceArtifact.contentHash || preferredArtifact.size !== sourceArtifact.size)
-    }
+    exportable: Boolean(preferredArtifact || sourceArtifact),
+    exportOptions: exportOptions.options,
+    defaultExportOptionId: exportOptions.defaultOptionId
   };
 }
 
 module.exports = {
+  artifactExportOptionId,
   buildEntryDetail,
+  buildEntryExportOptions,
   buildEntrySummary,
   buildLightweightEntry,
   entryFileName,

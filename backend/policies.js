@@ -6,6 +6,7 @@ const DEFAULT_ARCHIVE_PREFERENCES = {
 
 const COMPRESSION_BEHAVIORS = new Set(["fast", "balanced", "max"]);
 const OPTIMIZATION_TIERS = new Set(["lossless", "visually_lossless", "lossy_balanced", "lossy_aggressive"]);
+const OPTIMIZATION_MODES = new Set([...OPTIMIZATION_TIERS, "pick_per_file"]);
 
 const SESSION_IDLE_MINUTES_DEFAULT = 0;
 const SESSION_IDLE_MINUTES_MAX = 24 * 60;
@@ -20,13 +21,13 @@ function normalizeBoolean(value, fallback) {
 
 function normalizeArchivePreferences(nextPreferences) {
   const source = nextPreferences && typeof nextPreferences === "object" ? nextPreferences : {};
-  const legacyOptimizationMode = typeof source.optimizationMode === "string" ? source.optimizationMode : null;
+  const optimizationMode = normalizeEnum(source.optimizationMode, OPTIMIZATION_MODES, undefined);
   const nextOptimizationTier =
     typeof source.optimizationTier === "string"
       ? source.optimizationTier
-      : legacyOptimizationMode === "pick_per_file"
-        ? "visually_lossless"
-        : legacyOptimizationMode;
+      : optimizationMode && optimizationMode !== "pick_per_file"
+        ? optimizationMode
+        : undefined;
   return {
     compressionBehavior: normalizeEnum(
       source.compressionBehavior,
@@ -38,6 +39,7 @@ function normalizeArchivePreferences(nextPreferences) {
       OPTIMIZATION_TIERS,
       DEFAULT_ARCHIVE_PREFERENCES.optimizationTier
     ),
+    optimizationMode,
     stripDerivativeMetadata: normalizeBoolean(
       source.stripDerivativeMetadata,
       DEFAULT_ARCHIVE_PREFERENCES.stripDerivativeMetadata

@@ -3,8 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import packageJson from "../../../package.json";
 import type {
   AppShellState,
+  ArchiveEntryDetail,
   ArchivePreferences,
-  ArchiveEntryListItem
+  ArchiveEntryListItem,
+  ExportRequest
 } from "../../types";
 import {
   ARCHIVE_ENTRY_DRAG_TYPE,
@@ -26,14 +28,18 @@ import { useArchiveSession } from "../archive/useArchiveSession";
 import {
   ArchiveBrowserDialog,
   ArchiveManagerDialog,
+  ArchiveUnlockDialog,
   ContextMenuComponent,
   DeleteConfirmationDialog,
   DetailPanel,
+  ExportDialog,
   ActivityLogPanel,
   FileList,
   Hub,
   InstallBanner,
   ProgressBar,
+  CogIcon,
+  IconButton,
   SettingsDialog,
   TreeSidebar
 } from "./AppShellComponents";
@@ -48,9 +54,33 @@ type ArchiveHistoryState = {
   directory: string;
 };
 
+type ExportQualityMode = "highest_available" | "smaller_if_available";
+
+type ExportDialogConfig = {
+  destination: string;
+  preservePaths: boolean;
+  removeFromArchive: boolean;
+  perFileMode: boolean;
+  globalQualityMode: ExportQualityMode;
+  batchQualityMode: ExportQualityMode;
+  loading: boolean;
+  error: string | null;
+  entryOrder: string[];
+  entryDetails: Record<string, ArchiveEntryDetail>;
+  entryConfigs: Record<string, { include: boolean; exportOptionId: string | null; batchSelected: boolean }>;
+};
+
+function resolveExportOptionId(detail: ArchiveEntryDetail, mode: ExportQualityMode) {
+  if (mode === "smaller_if_available" && detail.exportOptions.length > 1) {
+    return detail.exportOptions[detail.exportOptions.length - 1]?.id ?? detail.defaultExportOptionId;
+  }
+  return detail.defaultExportOptionId ?? detail.exportOptions[0]?.id ?? null;
+}
+
 function settingsEqual(a: AppShellState["settings"], b: AppShellState["settings"]) {
   return a.compressionBehavior === b.compressionBehavior &&
     a.optimizationTier === b.optimizationTier &&
+    a.optimizationMode === b.optimizationMode &&
     a.stripDerivativeMetadata === b.stripDerivativeMetadata &&
     a.deleteOriginalFilesAfterSuccessfulUpload === b.deleteOriginalFilesAfterSuccessfulUpload &&
     a.argonProfile === b.argonProfile &&
@@ -64,6 +94,7 @@ function settingsEqual(a: AppShellState["settings"], b: AppShellState["settings"
 function archivePreferencesEqual(a: ArchivePreferences, b: ArchivePreferences) {
   return a.compressionBehavior === b.compressionBehavior &&
     a.optimizationTier === b.optimizationTier &&
+    a.optimizationMode === b.optimizationMode &&
     a.stripDerivativeMetadata === b.stripDerivativeMetadata;
 }
 
@@ -157,16 +188,17 @@ function AppShell() {
   // ── Dialogs
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [archiveManagerOpen, setArchiveManagerOpen] = useState(false);
-  const [archiveManagerTab, setArchiveManagerTab] = useState<"open" | "create">("open");
+  const [archiveUnlockOpen, setArchiveUnlockOpen] = useState(false);
   const [archiveDeleteCandidate, setArchiveDeleteCandidate] = useState<ArchiveBrowserItem | null>(null);
   const [deleteDialogState, setDeleteDialogState] = useState<{ title: string; description: string; detail: string; onConfirm: () => void } | null>(null);
+  const [exportDialog, setExportDialog] = useState<ExportDialogConfig | null>(null);
   const [detailOpen, setDetailOpen] = useState(true);
 
   // ── Archive form state
   const [archiveName, setArchiveName] = useState("Archive");
   const [archiveDirectory, setArchiveDirectory] = useState("");
   const [archivePassword, setArchivePassword] = useState("");
-  const [confirmArchivePassword, setConfirmArchivePassword] = useState("");
+  const [showArchivePassword, setShowArchivePassword] = useState(false);
   const [openArchivePath, setOpenArchivePath] = useState("");
   const [openPassword, setOpenPassword] = useState("");
   const [unlockPassword, setUnlockPassword] = useState("");
@@ -182,6 +214,7 @@ function AppShell() {
   const activeViewRef = useRef(activeView);
   const archiveHistoryStateRef = useRef<ArchiveHistoryState | null>(null);
   const suppressHistorySyncRef = useRef(false);
+  const exportDialogLoadIdRef = useRef(0);
 
   // ── Derived state
   const showArchiveView = archiveUnlocked && activeView === "archive";
@@ -190,13 +223,16 @@ function AppShell() {
   const canReprocessLossless = canReprocessLosslessly(selectedEntry);
   const effectiveOverrideMode = overrideMode === "lossless" && !canReprocessLossless ? "visually_lossless" : overrideMode;
   const uiLocked = isBusy;
-  const passwordsMatch = archivePassword.length > 0 && archivePassword === confirmArchivePassword;
   const canOpenArchive = !uiLocked && Boolean(openArchivePath) && (selectedArchiveIsUnlocked || Boolean(openPassword));
-  const canCreateArchive = !uiLocked && Boolean(archiveDirectory) && Boolean(archiveName) && passwordsMatch;
+  const canCreateArchive = !uiLocked && Boolean(archiveDirectory) && Boolean(archiveName) && archivePassword.length > 0;
   const archiveFolders = shellState.archive?.summary?.folders ?? [];
   const archiveName_ = shellState.archive?.summary?.name ?? "Archive";
   const activeStats = stats ?? shellState.archive?.summary ?? null;
   const selectedCount = selectedIds.size;
+  const selectedFileIds = [...selectedIds].filter((entryId) => {
+    const entry = entries.find((candidate) => candidate?.id === entryId);
+    return entry?.entryType === "file";
+  });
   const {
     archiveBrowserOpen,
     archiveBrowserLoading,
@@ -260,9 +296,8 @@ function AppShell() {
       setActiveView("archive");
       return;
     }
-    setArchiveManagerTab("open");
-    setArchiveManagerOpen(true);
     setOpenPassword("");
+    setArchiveUnlockOpen(true);
   }
 
   function swapSelectedArchive(nextPath?: string) {
@@ -278,7 +313,7 @@ function AppShell() {
     setActiveView("archive");
     setOpenPassword("");
     setUnlockPassword("");
-    setArchiveManagerOpen(false);
+    setArchiveUnlockOpen(false);
   }
 
   async function createSelectedArchive() {
@@ -288,7 +323,7 @@ function AppShell() {
     }));
     setActiveView("archive");
     setArchivePassword("");
-    setConfirmArchivePassword("");
+    setShowArchivePassword(false);
     setOpenPassword("");
     setArchiveManagerOpen(false);
   }
@@ -320,6 +355,189 @@ function AppShell() {
         clearSelection();
       }
     });
+  }
+
+  function applyGlobalExportQuality(
+    details: Record<string, ArchiveEntryDetail>,
+    entryOrder: string[],
+    mode: ExportQualityMode,
+    previousConfigs?: ExportDialogConfig["entryConfigs"]
+  ) {
+    const nextConfigs: ExportDialogConfig["entryConfigs"] = {};
+    for (const entryId of entryOrder) {
+      const detail = details[entryId];
+      if (!detail) continue;
+      nextConfigs[entryId] = {
+        include: previousConfigs?.[entryId]?.include ?? true,
+        exportOptionId: resolveExportOptionId(detail, mode),
+        batchSelected: previousConfigs?.[entryId]?.batchSelected ?? false
+      };
+    }
+    return nextConfigs;
+  }
+
+  async function openExportDialog(entryIds: string[]) {
+    if (uiLocked) return;
+    const uniqueIds = [...new Set(entryIds)].filter(Boolean);
+    if (uniqueIds.length === 0) return;
+
+    const requestId = exportDialogLoadIdRef.current + 1;
+    exportDialogLoadIdRef.current = requestId;
+    setExportDialog({
+      destination: shellState.settings.preferredArchiveRoot || "",
+      preservePaths: uniqueIds.length > 1,
+      removeFromArchive: false,
+      perFileMode: false,
+      globalQualityMode: "highest_available",
+      batchQualityMode: "highest_available",
+      loading: true,
+      error: null,
+      entryOrder: uniqueIds,
+      entryDetails: {},
+      entryConfigs: {}
+    });
+
+    try {
+      const details = await Promise.all(uniqueIds.map((entryId) => window.stow.getEntryDetail(entryId)));
+      if (exportDialogLoadIdRef.current !== requestId) {
+        return;
+      }
+
+      const exportableDetails = details.filter((detail) => detail.exportable && detail.exportOptions.length > 0);
+      const detailMap = Object.fromEntries(exportableDetails.map((detail) => [detail.id, detail] as const));
+      const entryOrder = exportableDetails.map((detail) => detail.id);
+      if (entryOrder.length === 0) {
+        setExportDialog((current) => current ? { ...current, loading: false, error: "None of the selected files have an exportable archived artifact." } : current);
+        return;
+      }
+
+      setExportDialog((current) => {
+        if (!current || exportDialogLoadIdRef.current !== requestId) {
+          return current;
+        }
+        return {
+          ...current,
+          loading: false,
+          error: null,
+          entryOrder,
+          entryDetails: detailMap,
+          entryConfigs: applyGlobalExportQuality(detailMap, entryOrder, "highest_available")
+        };
+      });
+    } catch (error) {
+      if (exportDialogLoadIdRef.current !== requestId) {
+        return;
+      }
+      setExportDialog((current) => current ? {
+        ...current,
+        loading: false,
+        error: error instanceof Error ? error.message : String(error)
+      } : current);
+    }
+  }
+
+  const exportDialogEntries = exportDialog
+    ? exportDialog.entryOrder
+        .map((entryId) => {
+          const detail = exportDialog.entryDetails[entryId];
+          const config = exportDialog.entryConfigs[entryId];
+          if (!detail || !config) return null;
+          return {
+            detail,
+            include: config.include,
+            exportOptionId: config.exportOptionId,
+            batchSelected: config.batchSelected
+          };
+        })
+        .filter((entry): entry is {
+          detail: ArchiveEntryDetail;
+          include: boolean;
+          exportOptionId: string | null;
+          batchSelected: boolean;
+        } => Boolean(entry))
+    : [];
+
+  const canExportFromDialog = Boolean(
+    exportDialog &&
+    !exportDialog.loading &&
+    exportDialog.destination.trim() &&
+    exportDialogEntries.some((entry) => entry.include && entry.exportOptionId)
+  );
+
+  function updateExportDialog(updater: (current: ExportDialogConfig) => ExportDialogConfig) {
+    setExportDialog((current) => (current ? updater(current) : current));
+  }
+
+  function applyGlobalQualityMode(mode: ExportQualityMode) {
+    updateExportDialog((current) => ({
+      ...current,
+      globalQualityMode: mode,
+      entryConfigs: applyGlobalExportQuality(current.entryDetails, current.entryOrder, mode, current.entryConfigs)
+    }));
+  }
+
+  function applySingleExportOption(optionId: string) {
+    updateExportDialog((current) => {
+      const entryId = current.entryOrder[0];
+      if (!entryId) return current;
+      return {
+        ...current,
+        entryConfigs: {
+          ...current.entryConfigs,
+          [entryId]: {
+            ...current.entryConfigs[entryId],
+            exportOptionId: optionId
+          }
+        }
+      };
+    });
+  }
+
+  function setExportDialogPerFileMode(enabled: boolean) {
+    updateExportDialog((current) => ({
+      ...current,
+      perFileMode: enabled,
+      entryConfigs: enabled
+        ? current.entryConfigs
+        : applyGlobalExportQuality(current.entryDetails, current.entryOrder, current.globalQualityMode, current.entryConfigs)
+    }));
+  }
+
+  async function submitExportDialog() {
+    if (!exportDialog) return;
+    const destination = exportDialog.destination.trim();
+    const entriesToExport = exportDialog.entryOrder
+      .map((entryId) => {
+        const config = exportDialog.entryConfigs[entryId];
+        if (!config?.include || !config.exportOptionId) {
+          return null;
+        }
+        return {
+          entryId,
+          exportOptionId: config.exportOptionId
+        };
+      })
+      .filter((entry): entry is ExportRequest["entries"][number] => Boolean(entry));
+
+    if (!destination) {
+      setExportDialog((current) => current ? { ...current, error: "Choose an export destination first." } : current);
+      return;
+    }
+    if (entriesToExport.length === 0) {
+      setExportDialog((current) => current ? { ...current, error: "Select at least one file to export." } : current);
+      return;
+    }
+
+    const request: ExportRequest = {
+      destination,
+      entries: entriesToExport,
+      preservePaths: exportDialog.preservePaths,
+      removeFromArchive: exportDialog.removeFromArchive
+    };
+
+    const runner = entriesToExport.length === 1 ? exportEntry : exportEntries;
+    await runner(request);
+    setExportDialog(null);
   }
 
   useEffect(() => {
@@ -589,7 +807,7 @@ function AppShell() {
 
   // Keyboard shortcuts
   useEffect(() => {
-    if (!showArchiveView || settingsOpen || archiveManagerOpen || deleteDialogState !== null) return;
+    if (!showArchiveView || settingsOpen || archiveManagerOpen || deleteDialogState !== null || exportDialog !== null) return;
     const handler = (e: KeyboardEvent) => {
       if (isEditableElement(e.target)) return;
       if (e.key === "Escape") { clearSelection(); setContextMenu(null); return; }
@@ -622,7 +840,7 @@ function AppShell() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [beginRename, clearSelection, deleteDialogState, entries, archiveManagerOpen, selectedIds, settingsOpen, showArchiveView, singleSelectedId, setFocusedId, setSelectedIds, typeSearch]);
+  }, [beginRename, clearSelection, deleteDialogState, entries, archiveManagerOpen, exportDialog, selectedIds, settingsOpen, showArchiveView, singleSelectedId, setFocusedId, setSelectedIds, typeSearch]);
 
   // ── Render
   const crumbs = archiveBreadcrumbs(currentDirectory);
@@ -759,27 +977,13 @@ function AppShell() {
                 setActiveView("hub");
                 return next;
               })}>Lock</button>
-              <button type="button" disabled={uiLocked} onClick={() => void shell.runTask("Closing archive", async () => {
-                const next = await window.stow.closeArchive();
-                setActiveView("hub");
-                return next;
-              })}>Close</button>
             </>
           )}
-          {archiveUnlocked && !showArchiveView && (
-            <button type="button" disabled={uiLocked} onClick={() => setActiveView("archive")}>Return to archive</button>
-          )}
-          {shellState.archive && !archiveUnlocked && (
-            <button type="button" disabled={uiLocked} onClick={() => prepareArchiveOpen(shellState.archive?.path ?? openArchivePath)}>Unlock</button>
-          )}
-          {!shellState.archive && (
-            <>
-              <button type="button" disabled={uiLocked} onClick={() => { setArchiveManagerTab("open"); setArchiveManagerOpen(true); }}>Open archive</button>
-              <button type="button" disabled={uiLocked} onClick={() => { setArchiveManagerTab("create"); setArchiveManagerOpen(true); }}>New archive</button>
-            </>
-          )}
-          <button type="button" disabled={uiLocked} onClick={() => openArchiveBrowser()}>All archives</button>
-          <button type="button" disabled={uiLocked} onClick={() => setSettingsOpen(true)}>Settings</button>
+        </div>
+        <div className="topbar-settings">
+          <IconButton title="Settings" className="icon-button-cog icon-button-plain" disabled={uiLocked} onClick={() => setSettingsOpen(true)}>
+            <CogIcon />
+          </IconButton>
         </div>
       </header>
 
@@ -838,7 +1042,8 @@ function AppShell() {
             error={archiveBrowserError}
             sortMode={archiveBrowserSortMode}
             isBusy={isBusy}
-            onOpenManager={tab => { setArchiveManagerTab(tab); setArchiveManagerOpen(true); }}
+            onOpenManager={() => setArchiveManagerOpen(true)}
+            onOpenArchiveBrowser={() => openArchiveBrowser()}
             onOpenArchivePath={prepareArchiveOpen}
             onRefreshArchives={() => void refreshDetectedArchives()}
             onSortModeChange={setArchiveBrowserSortMode}
@@ -846,11 +1051,6 @@ function AppShell() {
             onReturnToArchive={() => setActiveView("archive")}
             onLockArchive={() => void shell.runTask("Locking archive", async () => {
                 const next = await window.stow.lockArchive();
-                setActiveView("hub");
-                return next;
-              })}
-            onCloseArchive={() => void shell.runTask("Closing archive", async () => {
-                const next = await window.stow.closeArchive();
                 setActiveView("hub");
                 return next;
               })}
@@ -906,13 +1106,12 @@ function AppShell() {
             isBusy={isBusy}
             onClose={() => setDetailOpen(false)}
             onOpen={() => { if (singleSelectedId) void openEntryExternally(singleSelectedId); }}
-            onExportOriginal={() => { if (singleSelectedId) void exportEntry(singleSelectedId, "original"); }}
-            onExportOptimized={() => { if (singleSelectedId) void exportEntry(singleSelectedId, "optimized"); }}
+            onExport={() => { if (selectedFileIds.length > 0) void openExportDialog(selectedFileIds); }}
             onReprocess={() => { if (singleSelectedId) void reprocessEntry(singleSelectedId, effectiveOverrideMode); }}
             onDelete={() => { if (singleSelectedId) requestDelete([singleSelectedId]); }}
             onOverrideModeChange={setOverrideMode}
             onBulkDelete={() => requestDelete([...selectedIds])}
-            onBulkExport={variant => void exportEntries([...selectedIds], variant)}
+            canExportSelected={selectedFileIds.length > 0}
           />
         ) : (
           <div style={{ width: 0 }} />
@@ -971,15 +1170,9 @@ function AppShell() {
             if (ids.length === 1) void moveEntry(ids[0], dest);
             else if (ids.length > 1) void moveEntries({ entryIds: ids, destinationDirectory: dest });
             }}
-            onExportOriginal={() => {
+            onExport={() => {
               const ids = contextMenu.entryIds;
-            if (ids.length === 1) void exportEntry(ids[0], "original");
-            else void exportEntries(ids, "original");
-            }}
-            onExportOptimized={() => {
-              const ids = contextMenu.entryIds;
-            if (ids.length === 1) void exportEntry(ids[0], "optimized");
-            else void exportEntries(ids, "optimized");
+            if (ids.length > 0) void openExportDialog(ids);
             }}
             onDelete={() => requestDelete(contextMenu.entryIds)}
             onNewFolder={() => { setShowCreateFolder(true); setCreateFolderDraft(""); }}
@@ -993,32 +1186,35 @@ function AppShell() {
       {/* ── Dialogs */}
       <ArchiveManagerDialog
         open={archiveManagerOpen}
-        tab={archiveManagerTab}
         isBusy={isBusy}
-        openPath={openArchivePath}
-        openPassword={openPassword}
-        selectedArchiveIsUnlocked={selectedArchiveIsUnlocked}
-        canOpen={canOpenArchive}
         archiveName={archiveName}
         archiveDirectory={archiveDirectory}
         archivePassword={archivePassword}
-        confirmArchivePassword={confirmArchivePassword}
+        showArchivePassword={showArchivePassword}
         draftPrefs={draftArchivePreferences}
-        passwordsMatch={passwordsMatch}
         canCreate={canCreateArchive}
         onClose={() => setArchiveManagerOpen(false)}
-        onTabChange={setArchiveManagerTab}
-        onOpenPathChange={setOpenArchivePath}
-        onBrowseOpen={async () => { const p = await window.stow.pickDirectory(); if (p) setOpenArchivePath(p); }}
-        onOpenPasswordChange={setOpenPassword}
-        onOpen={() => void openSelectedArchive()}
         onArchiveNameChange={setArchiveName}
         onArchiveDirectoryChange={setArchiveDirectory}
         onBrowseCreate={async () => { const p = await window.stow.pickDirectory(); if (p) setArchiveDirectory(p); }}
         onArchivePasswordChange={setArchivePassword}
-        onConfirmArchivePasswordChange={setConfirmArchivePassword}
+        onArchivePasswordVisibilityChange={setShowArchivePassword}
         onDraftPrefsChange={applyArchivePreferences}
         onCreate={() => void createSelectedArchive()}
+      />
+
+      <ArchiveUnlockDialog
+        open={archiveUnlockOpen}
+        archivePath={openArchivePath}
+        isBusy={isBusy}
+        password={openPassword}
+        canUnlock={canOpenArchive && !selectedArchiveIsUnlocked}
+        onPasswordChange={setOpenPassword}
+        onClose={() => {
+          setArchiveUnlockOpen(false);
+          setOpenPassword("");
+        }}
+        onUnlock={() => void openSelectedArchive()}
       />
 
       <ArchiveBrowserDialog
@@ -1036,6 +1232,102 @@ function AppShell() {
         onSelect={setSelectedArchiveBrowserPath}
         onSwapSelected={swapSelectedArchive}
         onDeleteSelected={requestDeleteArchive}
+      />
+
+      <ExportDialog
+        open={Boolean(exportDialog)}
+        isBusy={isBusy}
+        loading={exportDialog?.loading ?? false}
+        error={exportDialog?.error ?? null}
+        entries={exportDialogEntries}
+        destination={exportDialog?.destination ?? ""}
+        preservePaths={exportDialog?.preservePaths ?? true}
+        removeFromArchive={exportDialog?.removeFromArchive ?? false}
+        perFileMode={exportDialog?.perFileMode ?? false}
+        globalQualityMode={exportDialog?.globalQualityMode ?? "highest_available"}
+        batchQualityMode={exportDialog?.batchQualityMode ?? "highest_available"}
+        canExport={canExportFromDialog}
+        resolveThumbnail={resolveThumbnail}
+        onClose={() => setExportDialog(null)}
+        onDestinationChange={(value) => updateExportDialog((current) => ({ ...current, destination: value, error: null }))}
+        onBrowseDestination={async () => {
+          const destination = await window.stow.pickDirectory();
+          if (!destination) return;
+          updateExportDialog((current) => ({ ...current, destination, error: null }));
+        }}
+        onPreservePathsChange={(value) => updateExportDialog((current) => ({ ...current, preservePaths: value }))}
+        onRemoveFromArchiveChange={(value) => updateExportDialog((current) => ({ ...current, removeFromArchive: value }))}
+        onPerFileModeChange={setExportDialogPerFileMode}
+        onGlobalQualityModeChange={applyGlobalQualityMode}
+        onSingleGlobalOptionChange={applySingleExportOption}
+        onBatchQualityModeChange={(value) => updateExportDialog((current) => ({ ...current, batchQualityMode: value }))}
+        onToggleBatchSelected={(entryId) => updateExportDialog((current) => ({
+          ...current,
+          entryConfigs: {
+            ...current.entryConfigs,
+            [entryId]: {
+              ...current.entryConfigs[entryId],
+              batchSelected: !current.entryConfigs[entryId]?.batchSelected
+            }
+          }
+        }))}
+        onToggleAllBatchSelected={(value) => updateExportDialog((current) => ({
+          ...current,
+          entryConfigs: Object.fromEntries(
+            current.entryOrder.map((entryId) => [
+              entryId,
+              {
+                ...current.entryConfigs[entryId],
+                batchSelected: value
+              }
+            ])
+          )
+        }))}
+        onApplyBatchQuality={() => updateExportDialog((current) => ({
+          ...current,
+          entryConfigs: Object.fromEntries(
+            current.entryOrder.map((entryId) => {
+              const detail = current.entryDetails[entryId];
+              const config = current.entryConfigs[entryId];
+              if (!detail || !config) {
+                return [entryId, config];
+              }
+              if (!config.batchSelected) {
+                return [entryId, config];
+              }
+              return [
+                entryId,
+                {
+                  ...config,
+                  exportOptionId: resolveExportOptionId(detail, current.batchQualityMode)
+                }
+              ];
+            })
+          )
+        }))}
+        onToggleEntryIncluded={(entryId, value) => updateExportDialog((current) => ({
+          ...current,
+          entryConfigs: {
+            ...current.entryConfigs,
+            [entryId]: {
+              ...current.entryConfigs[entryId],
+              include: value
+            }
+          },
+          error: null
+        }))}
+        onEntryOptionChange={(entryId, optionId) => updateExportDialog((current) => ({
+          ...current,
+          entryConfigs: {
+            ...current.entryConfigs,
+            [entryId]: {
+              ...current.entryConfigs[entryId],
+              exportOptionId: optionId
+            }
+          },
+          error: null
+        }))}
+        onSubmit={() => void submitExportDialog()}
       />
 
       <DeleteConfirmationDialog

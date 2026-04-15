@@ -22,7 +22,9 @@ const {
 } = require("./catalogStore");
 const { ArchiveQueryIndex } = require("./archiveQueryIndex");
 const {
+  artifactExportOptionId,
   buildEntryDetail,
+  buildEntryExportOptions,
   buildEntrySummary,
   entryFileName,
   folderName,
@@ -31,7 +33,7 @@ const {
   parentArchivePath,
   parseFolderEntryId
 } = require("./archiveEntryModel");
-const { analyzePath, classifyPath, generatePreviewFile } = require("./mediaTools");
+const { analyzePath, classifyPath, generatePreviewFile, resolveOptimizationTier } = require("./mediaTools");
 const { planMediaOptimization } = require("./optimizationPlanner");
 const { ObjectStore } = require("./objectStore");
 const {
@@ -67,7 +69,7 @@ const {
 const OPEN_TEMP_DIRNAME = "open-files";
 const PREVIEW_KINDS = ["thumbnail", "preview"];
 const MAX_RECENT_ARCHIVES = 20;
-const ENTRY_SUMMARY_INDEX_VERSION = 1;
+const ENTRY_SUMMARY_INDEX_VERSION = 2;
 const MUTATION_JOURNAL_VERSION = 1;
 
 async function writeJson(filePath, value) {
@@ -130,6 +132,71 @@ class ArchiveService {
     const leftSignature = this.artifactSignature(left);
     const rightSignature = this.artifactSignature(right);
     return Boolean(leftSignature && rightSignature && leftSignature === rightSignature);
+  }
+
+  exportPathKey(targetPath) {
+    const resolved = path.resolve(targetPath);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  }
+
+  listEntryExportSelections(entry) {
+    const revision = entry?.revisions?.find((candidate) => candidate.id === entry.latestRevisionId) ?? entry?.revisions?.[0] ?? null;
+    const preferredArtifact = this.getRevisionPreferredArtifact(revision);
+    const derivativeArtifacts = this.getRevisionDerivativeArtifacts(revision);
+    const artifactsByOptionId = new Map();
+
+    if (preferredArtifact) {
+      artifactsByOptionId.set(artifactExportOptionId("preferred", preferredArtifact), preferredArtifact);
+    }
+    for (const artifact of derivativeArtifacts) {
+      if (!this.artifactsEquivalent(artifact, preferredArtifact)) {
+        artifactsByOptionId.set(artifactExportOptionId("derivative", artifact), artifact);
+      }
+    }
+
+    const exportOptions = buildEntryExportOptions(entry).options;
+    return exportOptions
+      .map((option) => ({
+        ...option,
+        artifact: artifactsByOptionId.get(option.id) || null
+      }))
+      .filter((option) => option.artifact);
+  }
+
+  resolveEntryExportSelection(entry, exportOptionId) {
+    const selections = this.listEntryExportSelections(entry);
+    if (!selections.length) {
+      return null;
+    }
+    if (!exportOptionId) {
+      return selections[0];
+    }
+    return selections.find((selection) => selection.id === exportOptionId) || null;
+  }
+
+  buildEntryExportRelativePath(entry, descriptor, preservePaths) {
+    const fileName = entryFileName(entry, descriptor);
+    if (!preservePaths) {
+      return fileName;
+    }
+    const parentDirectory = parentArchivePath(entry.relativePath);
+    return parentDirectory ? path.join(parentDirectory, fileName) : fileName;
+  }
+
+  async resolveUniqueExportPath(targetPath, reservedPaths) {
+    const directory = path.dirname(targetPath);
+    const extension = path.extname(targetPath);
+    const baseName = path.basename(targetPath, extension);
+    let attempt = 1;
+    let candidatePath = targetPath;
+
+    while (reservedPaths.has(this.exportPathKey(candidatePath)) || (await exists(candidatePath))) {
+      attempt += 1;
+      candidatePath = path.join(directory, `${baseName} (${attempt})${extension}`);
+    }
+
+    reservedPaths.add(this.exportPathKey(candidatePath));
+    return candidatePath;
   }
 
   async releaseRevisionArtifacts(revision, exclusions = new Set()) {
@@ -1853,7 +1920,7 @@ class ArchiveService {
       extension: analysis.original.extension,
       mime: analysis.original.mime
     });
-    const optimizationTier = preferences.optimizationTier || preferences.optimizationMode || "visually_lossless";
+    const optimizationTier = resolveOptimizationTier(preferences);
 
     const optimizationState = analysis.kind === "file" ? "optimized" : "pending_optimization";
     const nextRevision = {
@@ -2190,28 +2257,17 @@ class ArchiveService {
     };
   }
 
-  async exportEntry(entryId, variant, destination) {
-    this.requireArchiveSession();
-    this.beginSessionOperation();
-    try {
-      const entry = await this.loadEntry(entryId);
-      if (!entry) {
-        throw new Error("Entry not found");
-      }
-      const revision = entry.revisions.find((candidate) => candidate.id === entry.latestRevisionId);
-      const descriptor =
-        variant === "optimized" ? this.getRevisionPreferredArtifact(revision) : this.getRevisionSourceArtifact(revision);
-      if (!descriptor) {
-        throw new Error("Requested artifact variant is not available");
-      }
-      const safeName = entry.name.replace(path.extname(entry.name), "");
-      const extension = descriptor.extension || path.extname(entry.name);
-      const exportPath = path.join(destination, `${safeName}${variant === "optimized" ? "-optimized" : "-original"}${extension}`);
-      await this.requireArchiveSession().objectStore.materializeObjectToFile(descriptor, exportPath);
-      this.pushLog(`exported ${entry.relativePath} as ${path.basename(exportPath)}`);
-    } finally {
-      this.endSessionOperation();
-    }
+  async exportEntry(entryId, destination, options = {}) {
+    return this.exportEntries(
+      [
+        {
+          entryId,
+          exportOptionId: options.exportOptionId ?? null
+        }
+      ],
+      destination,
+      options
+    );
   }
 
   async openEntryExternally(entryId) {
@@ -2520,32 +2576,94 @@ class ArchiveService {
     }
   }
 
-  async exportEntries(entryIds, variant, destination) {
+  async exportEntries(entryRequests, destination, options = {}) {
     this.requireArchiveSession();
     this.beginSessionOperation();
     try {
-      const uniqueIds = [...new Set(entryIds)];
-      let exportedCount = 0;
-      for (const entryId of uniqueIds) {
-        const entry = await this.loadEntry(entryId);
-        if (!entry) {
-          throw new Error(`Entry not found: ${entryId}`);
-        }
-        const revision = entry.revisions.find((candidate) => candidate.id === entry.latestRevisionId);
-        if (!revision) {
-          continue;
-        }
-        const descriptor = variant === "optimized" ? this.getRevisionPreferredArtifact(revision) : this.getRevisionSourceArtifact(revision);
-        if (!descriptor) {
-          continue;
-        }
-        const safeName = entry.name.replace(path.extname(entry.name), "");
-        const extension = descriptor.extension || path.extname(entry.name);
-        const exportPath = path.join(destination, `${safeName}${variant === "optimized" ? "-optimized" : "-original"}${extension}`);
-        await this.requireArchiveSession().objectStore.materializeObjectToFile(descriptor, exportPath);
-        exportedCount += 1;
+      if (typeof destination !== "string" || destination.trim().length === 0) {
+        throw new Error("Export destination is required");
       }
-      this.pushLog(`exported ${exportedCount} ${exportedCount === 1 ? "entry" : "entries"} to ${destination}`);
+
+      const preservePaths = options.preservePaths !== false;
+      const removeFromArchive = options.removeFromArchive === true;
+      const uniqueRequests = [];
+      const seenEntryIds = new Set();
+      for (const request of Array.isArray(entryRequests) ? entryRequests : []) {
+        const entryId = typeof request?.entryId === "string" ? request.entryId : "";
+        if (!entryId || seenEntryIds.has(entryId)) {
+          continue;
+        }
+        seenEntryIds.add(entryId);
+        uniqueRequests.push({
+          entryId,
+          exportOptionId: typeof request?.exportOptionId === "string" ? request.exportOptionId : null
+        });
+      }
+
+      if (!uniqueRequests.length) {
+        throw new Error("No exportable entries were selected");
+      }
+
+      const session = this.requireArchiveSession();
+      const exportPlans = [];
+      for (const request of uniqueRequests) {
+        const entry = await this.loadEntry(request.entryId);
+        if (!entry) {
+          throw new Error(`Entry not found: ${request.entryId}`);
+        }
+        const selection = this.resolveEntryExportSelection(entry, request.exportOptionId);
+        if (!selection?.artifact) {
+          throw new Error(`Requested export option is not available for ${entry.relativePath}`);
+        }
+        exportPlans.push({
+          entry,
+          selection,
+          relativePath: this.buildEntryExportRelativePath(entry, selection.artifact, preservePaths)
+        });
+      }
+
+      const reservedPaths = new Set();
+      let exportedCount = 0;
+      for (const plan of exportPlans) {
+        let exportPath = path.join(destination, plan.relativePath);
+        exportPath = await this.resolveUniqueExportPath(exportPath, reservedPaths);
+        await ensureDir(path.dirname(exportPath));
+        await session.objectStore.materializeObjectToFile(plan.selection.artifact, exportPath);
+        exportedCount += 1;
+        plan.exportPath = exportPath;
+      }
+
+      if (removeFromArchive && exportPlans.length > 0) {
+        const entriesToDelete = exportPlans.map((plan) => plan.entry);
+        await this.executeMutationTransaction({
+          mutate: async () => {
+            for (const entry of entriesToDelete) {
+              this.stageStoredEntryDeletion(entry);
+            }
+            return {
+              changed: true,
+              entriesToDelete
+            };
+          },
+          afterCommit: async ({ entriesToDelete }, context) => {
+            await this.finalizeStoredEntryDeletions(entriesToDelete);
+            this.emitEntriesInvalidated({
+              archiveId: context.session.root.archiveId,
+              reason: "export-delete",
+              selectedEntryId: context.session.root.entryOrder[0] || null
+            });
+          }
+        });
+      }
+
+      const exportedNames = exportPlans.slice(0, 3).map((plan) => path.basename(plan.exportPath || plan.relativePath));
+      const exportSummary =
+        exportedNames.length > 0
+          ? ` (${exportedNames.join(", ")}${exportPlans.length > exportedNames.length ? ", …" : ""})`
+          : "";
+      this.pushLog(
+        `exported ${exportedCount} ${exportedCount === 1 ? "entry" : "entries"} to ${destination}${removeFromArchive ? " and removed them from the archive" : ""}${exportSummary}`
+      );
     } finally {
       this.endSessionOperation();
     }

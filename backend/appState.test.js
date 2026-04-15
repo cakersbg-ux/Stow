@@ -119,6 +119,24 @@ test("initial state exposes the current settings schema", async () => {
   });
 });
 
+test("normalizeSettings preserves pick-per-file optimization mode", async () => {
+  await withTempDir(async (tempDir) => {
+    const { normalizeSettings } = loadFreshAppState();
+    const settings = normalizeSettings(
+      {
+        compressionBehavior: "balanced",
+        optimizationTier: "lossy_aggressive",
+        optimizationMode: "pick_per_file",
+        stripDerivativeMetadata: true
+      },
+      tempDir
+    );
+
+    assert.equal(settings.optimizationMode, "pick_per_file");
+    assert.equal(settings.optimizationTier, "lossy_aggressive");
+  });
+});
+
 test("initial state normalizes persisted settings", async () => {
   await withTempDir(async (tempDir) => {
     const userDataPath = path.join(tempDir, "user-data");

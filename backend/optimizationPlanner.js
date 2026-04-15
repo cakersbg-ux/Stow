@@ -4,6 +4,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const mime = require("mime-types");
 const { v4: uuid } = require("uuid");
+const { resolveOptimizationTier } = require("./mediaTools");
 
 const LOSSLESS_IMAGE_EXTENSIONS = new Set([".png", ".tif", ".tiff", ".bmp", ".jxl"]);
 const LOSSY_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".webp", ".avif"]);
@@ -658,7 +659,7 @@ function selectCandidate(sourceSize, tier, candidates, kind) {
 }
 
 async function planMediaOptimization(sourcePath, metadata, preferences, capabilities, workDir) {
-  const tier = preferences.optimizationTier || preferences.optimizationMode || "visually_lossless";
+  const tier = resolveOptimizationTier(preferences);
   const kind = metadata.kind || "file";
   const sourceSize = (await fs.stat(sourcePath)).size;
   const baseSummary = metadata.summary || path.basename(sourcePath);
